@@ -33,6 +33,20 @@ The SWA implementation binds to the existing SRA proxy recorded in `deployments.
 forge script script/DeployImplementation.s.sol --broadcast --verify --rpc-url $ETH_RPC_URL --skip-simulation
 ```
 
+### Verify a deployment
+`script/Verify.s.sol` (`VerifyScript`) is read-only. It rebuilds both implementations and proxies from the checked-out source and `deployments.json`, compares runtime code against the live contracts, and checks the ERC-1967 slot, initialization, owners and initializer effects.
+```sh
+forge script script/Verify.s.sol --rpc-url $ETH_RPC_URL
+```
+
+### Stage an upgrade
+`script/Upgrade.s.sol` (`UpgradeScript`) deploys one new implementation (or takes `NEW_IMPLEMENTATION`), checks its runtime code against a local build, and prints the exact `upgradeToAndCall` calldata, task id and veto calldata for both owners.
+```sh
+TARGET=sra forge script script/Upgrade.s.sol --broadcast --rpc-url $ETH_RPC_URL
+```
+
+Operator runbooks: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the one-time proxy deployment and [docs/UPGRADE.md](docs/UPGRADE.md) for the two-owner upgrade flow.
+
 ## Deploy Contract workflow
 `.github/workflows/deploy-contract.yml` runs either script from GitHub Actions.
 It never runs on push or pull request; trigger it manually from the Actions tab (Run workflow) or with the GitHub CLI:

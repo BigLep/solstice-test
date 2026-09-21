@@ -1,0 +1,23 @@
+name: Storage Layout
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      # Fails when a namespaced storage struct or slot constant changed without regenerating
+      # storage-layout/namespaced.txt, so that every layout change is visible in review.
+      # See docs/UPGRADE.md for what counts as an upgrade-safe change.
+      - name: Check namespaced storage snapshot
+        run: |
+          tools/storage-layout-snapshot.sh --check
