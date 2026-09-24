@@ -22,9 +22,8 @@ Target: `<sra|swa>`  Tag: `vX.Y.Z`  Previous implementation (for rollback): `0x.
 - [ ] Calibration: [hold elapsed](https://github.com/filecoin-project/solstice/blob/main/docs/UPGRADE.md#5-track-the-hold) and [executed](https://github.com/filecoin-project/solstice/blob/main/docs/UPGRADE.md#6-execute)
   - run:
   - execute tx:
-- [ ] Calibration: [verified, `deployments.json` updated](https://github.com/filecoin-project/solstice/blob/main/docs/UPGRADE.md#7-verify-and-record)
+- [ ] Calibration: [verified](https://github.com/filecoin-project/solstice/blob/main/docs/UPGRADE.md#7-verify-and-record)
   - run:
-  - PR:
 - [ ] Mainnet: implementation deployed
   - run:
   - implementation:
@@ -35,7 +34,6 @@ Target: `<sra|swa>`  Tag: `vX.Y.Z`  Previous implementation (for rollback): `0x.
 - [ ] Mainnet: hold elapsed and executed
   - run:
   - execute tx:
-- [ ] Mainnet: verified, `deployments.json` updated, release promoted from pre-release
+- [ ] Mainnet: verified, release promoted from pre-release
   - run:
-  - PR:
   - release:

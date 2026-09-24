@@ -12,9 +12,7 @@
     "activationEpoch": 6450120,
     "hold": 20160,
     "sra": "0x0339f205314C8210AF7Cb075d1A96D012e7896a9",
-    "swa": "0x66C11A9F6dfEC3c1557958cF9f575a023EB01421",
-    "sraImplementation": "0x2FBb2e00ADa8Aca24b7E0F42Df0BB9B36251106b",
-    "swaImplementation": "0x31982901ecC96D153f461cbAa6c36447af8aa9f1"
+    "swa": "0x66C11A9F6dfEC3c1557958cF9f575a023EB01421"
   },
   "314159": {
     "sraOwner1": "0xFb1B58925947E52B3f75BAc3D9fB5325cfb36371",
@@ -29,9 +27,7 @@
     "activationEpoch": 4109134,
     "hold": 720,
     "sra": "0x0339f205314C8210AF7Cb075d1A96D012e7896a9",
-    "swa": "0x66C11A9F6dfEC3c1557958cF9f575a023EB01421",
-    "sraImplementation": "0x2FBb2e00ADa8Aca24b7E0F42Df0BB9B36251106b",
-    "swaImplementation": "0x31982901ecC96D153f461cbAa6c36447af8aa9f1"
+    "swa": "0x66C11A9F6dfEC3c1557958cF9f575a023EB01421"
   },
   "3141592": {
     "sraOwner1": "0x48C7DC38e74C9fA9eA6484Ad6Ad0520349dC9B40",

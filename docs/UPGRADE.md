@@ -7,7 +7,7 @@ How a merged code change becomes the live implementation behind the ServiceRewar
 | Piece | Where | What it does |
 |---|---|---|
 | Proxy | OpenZeppelin [`ERC1967Proxy`](../lib/openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Proxy.sol), addresses `sra` and `swa` in [`deployments.json`](../deployments.json) | Holds state and delegates to the implementation. No admin; only the implementation's own logic can change it. |
-| Implementation | [`ServiceRewardsActor`](../src/ServiceRewardsActor.sol), [`StreamWeightActor`](../src/StreamWeightActor.sol), recorded as `sraImplementation` and `swaImplementation` in [`deployments.json`](../deployments.json) | Inherit [`UnanimousProxied`](../src/lib/UnanimousProxied.sol), whose `_authorizeUpgrade` is gated by the `unanimous` modifier in [`UnanimousGovernance`](../src/lib/UnanimousGovernance.sol). |
+| Implementation | [`ServiceRewardsActor`](../src/ServiceRewardsActor.sol), [`StreamWeightActor`](../src/StreamWeightActor.sol); the live one is whatever the proxy's ERC-1967 slot points at, recorded in the GitHub release | Inherit [`UnanimousProxied`](../src/lib/UnanimousProxied.sol), whose `_authorizeUpgrade` is gated by the `unanimous` modifier in [`UnanimousGovernance`](../src/lib/UnanimousGovernance.sol). |
 | Owners | Two [Safe](https://safe.filecoin.io) multisigs per contract: `sraOwner1`, `sraOwner2`, `swaOwner1`, `swaOwner2` in [`deployments.json`](../deployments.json) | The only parties that can approve an upgrade. |
 | Hold | `hold` in [`deployments.json`](../deployments.json), fixed at deployment as an immutable | Epochs that must pass after the second owner's approval before the upgrade can execute. |
 | Proposer key | `PROPOSER_PRIVATE_KEY` on the GitHub environments | Queues transactions on the owner Safes and pays gas. A plain key with no power over the contracts; not an owner key. |
@@ -65,7 +65,7 @@ After the hold, dispatch Upgrade with action `execute`. Anyone may execute, but 
 
 ### 7. Verify and record
 
-Dispatch Upgrade with action `verify`. It runs [`script/Verify.s.sol`](../script/Verify.s.sol), which rebuilds both implementations and proxies from the tag and checks them against the live contracts, ending with `ALL CHECKS PASSED` or the failed check. Then open a PR that sets `sraImplementation` or `swaImplementation` in [`deployments.json`](../deployments.json) to the new address; the verifier enforces that field from then on.
+Dispatch Upgrade with action `verify`. It runs [`script/Verify.s.sol`](../script/Verify.s.sol), which rebuilds both implementations and proxies from the tag and checks them against the live contracts, ending with `ALL CHECKS PASSED` or the failed check. `deployments.json` does not change: proxies are the only addresses it records, and the chain is the source of truth for the implementation behind them.
 
 Repeat steps 3 to 7 on mainnet. When mainnet is verified, promote the pre-release to a release with the mainnet implementation address and the execute transaction hashes for both networks:
 
