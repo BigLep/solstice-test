@@ -55,8 +55,10 @@ abstract contract UpgradeBase is DeploymentScript {
     ///      immutable (owners, hold, orchestrator, epoch parameters, SWA's SRA pointer) must match byte for byte.
     function _checkCode(string memory label, address live, address expected) internal view {
         require(live.code.length != 0, string.concat(label, ": no code at implementation"));
-        bytes memory liveCode = _maskAddress(live.code, live);
-        bytes memory expectedCode = _maskAddress(expected.code, expected);
+        bytes memory liveCode = live.code;
+        bytes memory expectedCode = expected.code;
+        _maskAddress(liveCode, live);
+        _maskAddress(expectedCode, expected);
         require(liveCode.length == expectedCode.length, string.concat(label, ": runtime code length mismatch"));
         bytes32 liveHash = keccak256(liveCode);
         bytes32 expectedHash = keccak256(expectedCode);
@@ -65,19 +67,18 @@ abstract contract UpgradeBase is DeploymentScript {
         require(liveHash == expectedHash, string.concat(label, ": runtime code mismatch"));
     }
 
-    /// @dev Returns a copy of `code` with every 20-byte occurrence of `self` replaced by zeros.
-    function _maskAddress(bytes memory code, address self) internal pure returns (bytes memory out) {
-        out = code;
+    /// @dev Zeroes every 20-byte occurrence of `self` in `code`, in place.
+    function _maskAddress(bytes memory code, address self) internal pure {
         bytes20 needle = bytes20(self);
-        uint256 n = out.length;
+        uint256 n = code.length;
         for (uint256 i = 0; i + 20 <= n; i++) {
             bytes20 window;
             assembly ("memory-safe") {
-                window := mload(add(add(out, 0x20), i))
+                window := mload(add(add(code, 0x20), i))
             }
             if (window == needle) {
                 for (uint256 j = 0; j < 20; j++) {
-                    out[i + j] = 0;
+                    code[i + j] = 0;
                 }
                 i += 19;
             }

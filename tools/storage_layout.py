@@ -17,6 +17,7 @@ would reinterpret live storage behind the proxy and needs a migration, which doc
 
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -60,6 +61,29 @@ def normalize(layout):
     ]
 
 
+NAMESPACE_RE = re.compile(r"@custom:storage-location\s+erc7201:\S+[^{]*?struct\s+([A-Za-z0-9_]+)\s*\{", re.S)
+
+
+def namespaced_structs():
+    """Names of every struct in src/ declared with an ERC-7201 @custom:storage-location tag."""
+    names = set()
+    for dirpath, _, files in os.walk(os.path.join(ROOT, "src")):
+        for f in files:
+            if f.endswith(".sol"):
+                with open(os.path.join(dirpath, f)) as fh:
+                    names.update(NAMESPACE_RE.findall(fh.read()))
+    return names
+
+
+def check_probe_covers_namespaces(layout):
+    """Fail if a namespaced struct has no variable in StorageLayoutProbe (its layout would go unchecked)."""
+    probed = {e["type"].split(".")[-1] for e in layout}
+    missing = sorted(namespaced_structs() - probed)
+    if missing:
+        print("namespaced structs missing from test/layout/StorageLayoutProbe.sol: " + ", ".join(missing), file=sys.stderr)
+        sys.exit(1)
+
+
 def entries_by_name(items):
     return {e["name"]: e for e in items}
 
@@ -100,7 +124,9 @@ def main(argv):
     if mode == "--check":
         with open(OUT) as f:
             committed = json.load(f)
-        if committed != compiler_layout():
+        current = compiler_layout()
+        check_probe_covers_namespaces(current)
+        if committed != current:
             print("storage-layout/layout.json is stale; run tools/storage_layout.py and commit the result", file=sys.stderr)
             return 1
         print("storage layout snapshot is up to date")
@@ -115,8 +141,10 @@ def main(argv):
         except subprocess.CalledProcessError:
             print(f"no snapshot at {ref}:{rel}; nothing to compare against")
             return 0
+        current = compiler_layout()
+        check_probe_covers_namespaces(current)
         errors = []
-        compare(json.loads(base_text), compiler_layout(), "layout", errors)
+        compare(json.loads(base_text), current, "layout", errors)
         if errors:
             print("storage layout is NOT upgrade-safe relative to base:")
             for e in errors:

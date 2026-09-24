@@ -18,6 +18,8 @@ concurrency:
 
 jobs:
   release:
+    # workflow_dispatch can be run from any ref; only main may mint releases.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

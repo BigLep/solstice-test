@@ -192,6 +192,10 @@ class Upgrade:
         tx_hash = self.w3.eth.send_raw_transaction(signed.raw_transaction)
         receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=600)
         print(f"tx 0x{tx_hash.hex()} status {receipt['status']} block {receipt['blockNumber']}")
+        if receipt["status"] != 1:
+            die("execution transaction reverted")
+        if self.current_impl() != self.new_impl:
+            die(f"implementation slot is {self.current_impl()}, not {self.new_impl}")
         print(f"implementation slot now {self.current_impl()}")
 
 
