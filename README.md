@@ -34,7 +34,7 @@ forge script script/DeployImplementation.s.sol --broadcast --verify --rpc-url $E
 ```
 
 ### Upgrades
-Implementation upgrades run through the `Upgrade` workflow (`.github/workflows/upgrade.yml`): rehearse, propose to the owner Safes, track the hold, execute, verify. The runbook is [docs/UPGRADE.md](docs/UPGRADE.md); [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) covers new networks. Under the hood:
+Versions are bumped in `version.json` with notes in `CHANGELOG.md`; the `Releaser` workflow tags and pre-releases them. Implementation upgrades run through the `Upgrade` workflow (`.github/workflows/upgrade.yml`): rehearse, propose to the owner Safes, track the hold, execute, verify (which records into the release). The runbook is [docs/UPGRADE.md](docs/UPGRADE.md); [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) covers new networks. Under the hood:
 * `script/Verify.s.sol`: read-only check that the live proxies and implementations match the checked-out source and `deployments.json`.
 * `script/Rehearse.s.sol`: full upgrade dry run in a local fork (impersonated owners, hold, execute, verify).
 * `script/Upgrade.s.sol`: verifies a new implementation against a local build and prints the `upgradeToAndCall` calldata and task id.

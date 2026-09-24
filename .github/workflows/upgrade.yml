@@ -2,8 +2,9 @@ name: Upgrade
 
 # One step of an SRA/SWA implementation upgrade, run from the Actions tab so the record lives in a workflow run.
 # See docs/UPGRADE.md for the sequence. Read-only actions (rehearse, status, verify) need no secrets. Signed
-# actions (propose, execute) run in the network's environment, which holds PROPOSER_PRIVATE_KEY and whose
-# required reviewers (with self-review prevented) provide the dispatcher-plus-approver sign-off.
+# actions (propose, execute) run in the network's environment, which holds DEPLOYER_PRIVATE_KEY and whose
+# required reviewers (with self-review prevented) provide the dispatcher-plus-approver sign-off. Always dispatch
+# with the release tag as the ref.
 on:
   workflow_dispatch:
     inputs:
@@ -36,9 +37,6 @@ on:
         required: false
         type: string
 
-permissions:
-  contents: read
-
 concurrency:
   group: upgrade-${{ inputs.network }}-${{ inputs.target }}
   cancel-in-progress: false
@@ -47,6 +45,8 @@ jobs:
   readonly:
     if: ${{ inputs.action == 'rehearse' || inputs.action == 'status' || inputs.action == 'verify' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # verify appends to the release
     steps:
       - uses: actions/checkout@v7
         with:
@@ -61,8 +61,8 @@ jobs:
       - name: Select network
         run: |
           case "${{ inputs.network }}" in
-            Calibnet) echo "ETH_RPC_URL=https://api.calibration.node.glif.io/rpc/v1" >> "$GITHUB_ENV" ;;
-            Mainnet)  echo "ETH_RPC_URL=https://api.node.glif.io/rpc/v1" >> "$GITHUB_ENV" ;;
+            Calibnet) echo "CHAIN_ID=314159" >> "$GITHUB_ENV"; echo "ETH_RPC_URL=https://api.calibration.node.glif.io/rpc/v1" >> "$GITHUB_ENV" ;;
+            Mainnet)  echo "CHAIN_ID=314"    >> "$GITHUB_ENV"; echo "ETH_RPC_URL=https://api.node.glif.io/rpc/v1" >> "$GITHUB_ENV" ;;
           esac
 
       - name: Run ${{ inputs.action }}
@@ -80,6 +80,33 @@ jobs:
               forge script script/Verify.s.sol --rpc-url "$ETH_RPC_URL" 2>&1 | tee "$RUNNER_TEMP/out.txt" ;;
           esac
 
+      - name: Record verification in the release
+        if: ${{ inputs.action == 'verify' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG=$(jq -r .version version.json)
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            echo "no release $TAG; nothing to record"
+            exit 0
+          fi
+          SLOT=0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc
+          SRA=$(jq -r ".[\"$CHAIN_ID\"].sra" deployments.json)
+          SWA=$(jq -r ".[\"$CHAIN_ID\"].swa" deployments.json)
+          SRA_IMPL=$(cast storage "$SRA" "$SLOT" --rpc-url "$ETH_RPC_URL" | sed 's/^0x000000000000000000000000/0x/')
+          SWA_IMPL=$(cast storage "$SWA" "$SLOT" --rpc-url "$ETH_RPC_URL" | sed 's/^0x000000000000000000000000/0x/')
+          EPOCH=$(cast block-number --rpc-url "$ETH_RPC_URL")
+          gh release view "$TAG" --json body -q .body > notes.md
+          printf '\n\n**Verified on %s** at epoch %s from `%s` ([run](%s/%s/actions/runs/%s)): SRA implementation `%s`, SWA implementation `%s`.\n' \
+            "${{ inputs.network }}" "$EPOCH" "${GITHUB_SHA::8}" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$SRA_IMPL" "$SWA_IMPL" >> notes.md
+          if [ "${{ inputs.network }}" = "Mainnet" ]; then
+            gh release edit "$TAG" --notes-file notes.md --prerelease=false --latest
+            echo "promoted $TAG to a release"
+          else
+            gh release edit "$TAG" --notes-file notes.md
+          fi
+
       - name: Job summary
         if: always()
         run: |
@@ -94,6 +121,8 @@ jobs:
     if: ${{ inputs.action == 'propose' || inputs.action == 'execute' }}
     runs-on: ubuntu-latest
     environment: ${{ inputs.network == 'Mainnet' && 'mainnet' || 'calibnet' }}
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
         with:
@@ -114,7 +143,9 @@ jobs:
 
       - name: Run ${{ inputs.action }}
         env:
-          PROPOSER_PRIVATE_KEY: ${{ secrets.PROPOSER_PRIVATE_KEY }}
+          # One operations key: it deploys implementations (Deploy Contract), proposes (registered as a proposer
+          # on the owner Safes) and executes. It has no power over the contracts.
+          PROPOSER_PRIVATE_KEY: ${{ secrets.DEPLOYER_PRIVATE_KEY }}
         run: |
           set -o pipefail
           test -n "${{ inputs.new_implementation }}" || { echo "new_implementation is required" >&2; exit 1; }
