@@ -1,33 +1,41 @@
 ---
 name: SRA/SWA upgrade
 about: Track one implementation upgrade of the SRA or SWA proxy, calibration then mainnet
-title: "Upgrade <sra|swa> to <tag>"
+title: "Upgrade <sra|swa> to vX.Y.Z"
 labels: upgrade
 ---
 
-Instructions are in [docs/UPGRADE.md](../../docs/UPGRADE.md). Keep this table current; put everything else (command output, decisions) in comments and link them from the checklist.
+Runbook: [docs/UPGRADE.md](https://github.com/filecoin-project/solstice/blob/main/docs/UPGRADE.md). This issue tracks progress: check items off and link each run or comment under it. The durable record (tag, addresses, transaction hashes) lives in the GitHub release for the tag, not here.
 
-| | Calibration | Mainnet |
-|---|---|---|
-| Tag / commit | | |
-| New implementation | | |
-| Safe proposals (safeTxHash, owner 1 / owner 2) | | |
-| Owner 1 submit tx / owner 2 approve tx | | |
-| Hold ends (epoch) | | |
-| Execute tx | | |
-| `Verify.s.sol` result (link to comment) | | |
-| Previous implementation (for rollback) | | |
+Target: `<sra|swa>`  Tag: `vX.Y.Z`  Previous implementation (for rollback): `0x...`
 
-## Checklist
-
-- [ ] Change merged; `Storage Layout` and `Test` CI green on the tagged commit (step 1)
-- [ ] Rehearsal passed on a calibration fork (step 2, link comment)
-- [ ] Calibration: implementation deployed via `Deploy Contract` workflow (step 3, link run)
-- [ ] Calibration: proposed to both owner Safes, both executed (step 4)
-- [ ] Calibration: hold elapsed, executed (steps 5 and 6)
-- [ ] Calibration: `Verify.s.sol` passed (step 7, link comment)
-- [ ] Mainnet: implementation deployed (step 3)
-- [ ] Mainnet: proposed and approved (step 4)
-- [ ] Mainnet: hold elapsed, executed (steps 5 and 6)
-- [ ] Mainnet: `Verify.s.sol` passed (step 7)
-- [ ] `deployments.json` unchanged (proxies do not move); close issue
+- [ ] [Merged and tagged](https://github.com/filecoin-project/solstice/blob/main/docs/UPGRADE.md#1-merge-and-tag); Storage Layout and Test CI green on the tag
+- [ ] [Rehearsed](https://github.com/filecoin-project/solstice/blob/main/docs/UPGRADE.md#2-rehearse) on a calibration fork
+  - run:
+- [ ] Calibration: [implementation deployed, pre-release created](https://github.com/filecoin-project/solstice/blob/main/docs/UPGRADE.md#3-deploy-the-implementation-and-cut-a-pre-release)
+  - run:
+  - implementation:
+- [ ] Calibration: [proposed](https://github.com/filecoin-project/solstice/blob/main/docs/UPGRADE.md#4-propose-to-the-owners) and both owners executed
+  - run:
+  - owner 1 tx:
+  - owner 2 tx:
+- [ ] Calibration: [hold elapsed](https://github.com/filecoin-project/solstice/blob/main/docs/UPGRADE.md#5-track-the-hold) and [executed](https://github.com/filecoin-project/solstice/blob/main/docs/UPGRADE.md#6-execute)
+  - run:
+  - execute tx:
+- [ ] Calibration: [verified, `deployments.json` updated](https://github.com/filecoin-project/solstice/blob/main/docs/UPGRADE.md#7-verify-and-record)
+  - run:
+  - PR:
+- [ ] Mainnet: implementation deployed
+  - run:
+  - implementation:
+- [ ] Mainnet: proposed and both owners executed
+  - run:
+  - owner 1 tx:
+  - owner 2 tx:
+- [ ] Mainnet: hold elapsed and executed
+  - run:
+  - execute tx:
+- [ ] Mainnet: verified, `deployments.json` updated, release promoted from pre-release
+  - run:
+  - PR:
+  - release:

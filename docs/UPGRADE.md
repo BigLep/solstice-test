@@ -1,17 +1,18 @@
 # Upgrading SRA and SWA
 
-How a merged code change becomes the live implementation behind the ServiceRewardsActor (SRA) or StreamWeightActor (SWA) proxy on calibration and mainnet. The proxies are permanent: their addresses are in [`deployments.json`](../deployments.json) and hardwired into Lotus for nv29 ([lotus#13809](https://github.com/filecoin-project/lotus/pull/13809)). Deploying new proxies is a one-off that already happened; see [DEPLOYMENT.md](./DEPLOYMENT.md) only if you are bringing up a new network.
+How a merged code change becomes the live implementation behind the ServiceRewardsActor (SRA) or StreamWeightActor (SWA) proxy on calibration and mainnet. The proxies are permanent; their addresses are in [`deployments.json`](../deployments.json) and hardwired into Lotus ([lotus#13809](https://github.com/filecoin-project/lotus/pull/13809)). See [DEPLOYMENT.md](./DEPLOYMENT.md) only if you are bringing up a new network.
 
 ## How an upgrade works
 
 | Piece | Where | What it does |
 |---|---|---|
-| Proxy | OpenZeppelin [`ERC1967Proxy`](../lib/openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Proxy.sol) | Holds state and delegates to the implementation. No admin; nothing outside the implementation can change it. |
-| Implementation | [`ServiceRewardsActor`](../src/ServiceRewardsActor.sol), [`StreamWeightActor`](../src/StreamWeightActor.sol) | Inherit [`UnanimousProxied`](../src/lib/UnanimousProxied.sol), whose `_authorizeUpgrade` is gated by the `unanimous` modifier in [`UnanimousGovernance`](../src/lib/UnanimousGovernance.sol) with the hold fixed at deployment. |
-| Owners | Two [Safe](https://safe.filecoin.io) multisigs per contract, `sraOwner1/2` and `swaOwner1/2` in `deployments.json`, same addresses on both networks | The only parties that can approve an upgrade. |
-| Deployer / proposer key | Any funded key | Pays gas and proposes. No power over the contracts; not an owner key. |
+| Proxy | OpenZeppelin [`ERC1967Proxy`](../lib/openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Proxy.sol), addresses `sra` and `swa` in [`deployments.json`](../deployments.json) | Holds state and delegates to the implementation. No admin; only the implementation's own logic can change it. |
+| Implementation | [`ServiceRewardsActor`](../src/ServiceRewardsActor.sol), [`StreamWeightActor`](../src/StreamWeightActor.sol), recorded as `sraImplementation` and `swaImplementation` in [`deployments.json`](../deployments.json) | Inherit [`UnanimousProxied`](../src/lib/UnanimousProxied.sol), whose `_authorizeUpgrade` is gated by the `unanimous` modifier in [`UnanimousGovernance`](../src/lib/UnanimousGovernance.sol). |
+| Owners | Two [Safe](https://safe.filecoin.io) multisigs per contract: `sraOwner1`, `sraOwner2`, `swaOwner1`, `swaOwner2` in [`deployments.json`](../deployments.json) | The only parties that can approve an upgrade. |
+| Hold | `hold` in [`deployments.json`](../deployments.json), fixed at deployment as an immutable | Epochs that must pass after the second owner's approval before the upgrade can execute. |
+| Proposer key | `PROPOSER_PRIVATE_KEY` on the GitHub environments | Queues transactions on the owner Safes and pays gas. A plain key with no power over the contracts; not an owner key. |
 
-The upgrade call is the standard `upgradeToAndCall(newImplementation, data)` on the proxy. Its task id is `keccak256(calldata)`, so both owners must send byte-identical calldata with zero value.
+The upgrade call is [`upgradeToAndCall(newImplementation, data)`](../lib/openzeppelin-contracts/contracts/proxy/utils/UUPSUpgradeable.sol) on the proxy. Its task id is `keccak256(calldata)`, so both owners must send byte-identical calldata with zero value.
 
 | Step | Who | Effect |
 |---|---|---|
@@ -20,64 +21,60 @@ The upgrade call is the standard `upgradeToAndCall(newImplementation, data)` on 
 | Hold | Anyone | Execution reverts with `HoldUntil(epoch)` until the hold elapses. Either owner can `veto(taskId)`. |
 | Execute | Anyone | Implementation slot changes, `data` (if any) runs, task is deleted. |
 
-Hold (`hold` in `deployments.json`): 20160 epochs (about 7 days) on mainnet, 720 (about 6 hours) on calibration.
-
 ## Steps
 
-Calibration first, then mainnet, from the same tag. Each step is one command; record its output in the tracking issue.
+Calibration first, then mainnet, from the same tag. Every step is a dispatch of the [Upgrade workflow](https://github.com/filecoin-project/solstice/actions/workflows/upgrade.yml) ([source](../.github/workflows/upgrade.yml)) or the [Deploy Contract workflow](https://github.com/filecoin-project/solstice/actions/workflows/deploy-contract.yml) ([source](../.github/workflows/deploy-contract.yml)), always with the tag as the ref. Each run's summary is the record; link it from the tracking issue. Local equivalents are in the workflow source.
 
-**0. Open a tracking issue** from the [upgrade template](../.github/ISSUE_TEMPLATE/upgrade.md). Addresses and transaction hashes go in its table; everything else goes in comments.
+### 0. Open a tracking issue
 
-**1. Merge the change and tag it.** CI does the safety checks: the `Storage Layout` workflow ([`tools/storage-layout-snapshot.sh`](../tools/storage-layout-snapshot.sh)) fails any PR whose namespaced structs or slot constants change in a way that is not append-only, and the test suite covers the upgrade paths in [`test/UnanimousProxied.t.sol`](../test/UnanimousProxied.t.sol). If the layout check fails, the change needs a storage migration, which this runbook does not cover; stop and design that first.
+Use the [upgrade issue template](../.github/ISSUE_TEMPLATE/upgrade.md). Progress and decisions go in issue comments; the durable record (tag, addresses, transaction hashes) goes in the GitHub release created in step 3.
 
-**2. Rehearse in a fork.** From the tag:
+### 1. Merge and tag
 
-```sh
-TARGET=sra forge script script/Rehearse.s.sol --rpc-url https://api.calibration.node.glif.io/rpc/v1
-```
-
-[`script/Rehearse.s.sol`](../script/Rehearse.s.sol) forks the network in the local EVM, builds the implementation, impersonates both owner Safes to submit and approve, proves early execution reverts, rolls past the hold, executes, and runs every verifier check. It prints `REHEARSAL COMPLETE` or reverts naming the step. Nothing is sent. Paste the tail into the issue.
-
-**3. Deploy the implementation.** Dispatch the `Deploy Contract` workflow (`.github/workflows/deploy-contract.yml`, from [#73](https://github.com/filecoin-project/solstice/pull/73)) against the tag with target "Implementations only" and dry run off. It needs `DEPLOYER_PRIVATE_KEY` on the `calibnet` or `mainnet` GitHub environment; any funded key. It deploys both implementations and verifies them on Sourcify; use the one you are upgrading and ignore the other. Record the address from the job summary.
-
-**4. Propose to the owners.**
+CI does the safety checks on the PR: the [Storage Layout workflow](../.github/workflows/storage-layout.yml) fails any change to the namespaced structs or slot constants that is not append-only, and the [tests](../test/UnanimousProxied.t.sol) cover the governance paths. If the layout check fails, the change needs a storage migration, which this runbook does not cover; stop and design that first. After merge, tag the commit with the next semantic version:
 
 ```sh
-PROPOSER_PRIVATE_KEY=... tools/upgrade.sh sra 0x<new-implementation> propose
+git tag vX.Y.Z <merge-commit> && git push origin vX.Y.Z
 ```
 
-[`tools/upgrade.sh`](../tools/upgrade.sh) first rebuilds the implementation from the checked-out source and refuses to continue unless the on-chain runtime code matches ([`script/Upgrade.s.sol`](../script/Upgrade.s.sol)), then queues the same transaction on both owner Safes through the [Filecoin Safe Transaction Service](https://transaction.safe.filecoin.io/). Each owner group opens the Safe app, sees it queued, confirms and executes. Owner 1's execution is the submit; owner 2's is the approve, and the hold starts when it lands. Record both `safeTxHash` values and the two transaction hashes.
+### 2. Rehearse
 
-If the proposer is not registered yet (see setup below), run the `calldata` mode instead and give the owners the proxy address and calldata to enter in the Safe app's transaction builder. It is the same transaction.
+Dispatch Upgrade with action `rehearse`, network Calibnet, ref `vX.Y.Z`. It runs [`script/Rehearse.s.sol`](../script/Rehearse.s.sol): a local fork in which the implementation is built from source, both owner Safes are impersonated to submit and approve, early execution is shown to revert, the hold is rolled past, the upgrade executes, and every verifier check runs. The summary ends with `REHEARSAL COMPLETE` or the failing step. Nothing is sent.
 
-**5. Track the hold.**
+### 3. Deploy the implementation and cut a pre-release
+
+Dispatch Deploy Contract with target "Implementations only", dry run off, ref `vX.Y.Z`. It deploys both implementations from the tag and verifies them on Sourcify; if you are only upgrading one contract, ignore the other address. Take the address from the run summary and create a pre-release that carries it:
 
 ```sh
-tools/upgrade.sh sra 0x<new-implementation> status
+gh release create vX.Y.Z --prerelease --title "vX.Y.Z" --notes "<what changed>; calibnet <sra|swa> implementation 0x..."
 ```
 
-Prints how many owners have approved and the epoch the hold ends. If something is wrong, either owner cancels with the `veto` calldata the tool prints.
+### 4. Propose to the owners
 
-**6. Execute.** After the hold, from any funded key:
+Dispatch Upgrade with action `propose`, the network, target and the new implementation address. This runs in the network's environment, so it waits for a required reviewer other than the dispatcher: two humans sign off on every proposal. It then runs [`tools/upgrade.sh`](../tools/upgrade.sh), which rebuilds the implementation from the tag and refuses to continue unless the on-chain runtime code matches ([`script/Upgrade.s.sol`](../script/Upgrade.s.sol)), and queues the identical transaction on both owner Safes through the [Filecoin Safe Transaction Service](https://transaction.safe.filecoin.io/). Each owner group then confirms and executes it in the Safe app. Owner 1's execution is the submit; owner 2's is the approve, and the hold starts when it lands.
+
+Note: if there is an issue with [Safe's proposer functionality](https://help.safe.global/articles/1671337645-proposers), the same run summary prints the proxy address and calldata; the owners can enter those in the Safe app's transaction builder instead. It is the same transaction.
+
+### 5. Track the hold
+
+Dispatch Upgrade with action `status`. The summary shows how many owners have approved and the epoch the hold ends. If something is wrong, either owner cancels with the veto calldata printed in the same summary.
+
+### 6. Execute
+
+After the hold, dispatch Upgrade with action `execute`. Anyone may execute, but running it through the workflow keeps the record in one place.
+
+### 7. Verify and record
+
+Dispatch Upgrade with action `verify`. It runs [`script/Verify.s.sol`](../script/Verify.s.sol), which rebuilds both implementations and proxies from the tag and checks them against the live contracts, ending with `ALL CHECKS PASSED` or the failed check. Then open a PR that sets `sraImplementation` or `swaImplementation` in [`deployments.json`](../deployments.json) to the new address; the verifier enforces that field from then on.
+
+Repeat steps 3 to 7 on mainnet. When mainnet is verified, promote the pre-release to a release with the mainnet implementation address and the execute transaction hashes for both networks:
 
 ```sh
-PROPOSER_PRIVATE_KEY=... tools/upgrade.sh sra 0x<new-implementation> execute
+gh release edit vX.Y.Z --prerelease=false --notes "<notes with addresses and tx hashes>"
 ```
 
-**7. Verify.** From the tag:
+## One-time setup
 
-```sh
-forge script script/Verify.s.sol --rpc-url $ETH_RPC_URL
-```
-
-[`script/Verify.s.sol`](../script/Verify.s.sol) rebuilds both implementations and proxies from source and `deployments.json`, compares runtime code with the live contracts, and checks the implementation slot, initialization, owner sets and initializer state. It ends with `ALL CHECKS PASSED` or names the failed check. Record it, then repeat from step 3 on mainnet.
-
-## One-time setup: proposer on the owner Safes
-
-Step 4 relies on Safe proposers (delegates): an address that can queue transactions for a Safe but cannot sign them. One owner of each of the four Safes registers the engineering proposer address at [safe.filecoin.io](https://safe.filecoin.io) under Settings, Setup, Proposers, once per network. The proposer must be a plain key, not a Safe, because it signs proposals off chain; hold it like the deployer key, a funded engineering-held key with no other role. Until this is done, step 4 falls back to handing the owners calldata.
-
-## Out of scope until needed
-
-- Rollback: a new upgrade back to the previous implementation, subject to the same hold, so keep the previous implementation address in the issue. Before execution, rollback is a veto.
-- Migrations and reinitializers: `tools/upgrade.sh` and the scripts accept `UPGRADE_CALLDATA` for a reinitializer call, but the process around a storage migration has not been designed.
-- Owner replacement: `replaceOwner` on `UnanimousProxied` is a separate unanimous flow with no hold. Veto pending tasks before replacing an owner.
+- **Proposer key.** Generate a plain key, fund it lightly on both networks, and store it as `PROPOSER_PRIVATE_KEY` on the `calibnet` and `mainnet` GitHub environments. Its only ability is queuing transactions on Safes that have registered it; it cannot sign or execute anything on its own. A Safe cannot be a proposer because proposals are signed off chain.
+- **Environment reviewers.** Set required reviewers on both environments and enable "prevent self-review", so a `propose` or `execute` run needs the dispatcher plus one other person.
+- **Register the proposer on the owner Safes.** One owner of each of the four Safes adds the proposer address at [safe.filecoin.io](https://safe.filecoin.io) under Settings, Setup, Proposers, once per network. Until this is done, step 4 falls back to the calldata route described there.

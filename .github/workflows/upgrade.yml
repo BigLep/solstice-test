@@ -1,0 +1,132 @@
+name: Upgrade
+
+# One step of an SRA/SWA implementation upgrade, run from the Actions tab so the record lives in a workflow run.
+# See docs/UPGRADE.md for the sequence. Read-only actions (rehearse, status, verify) need no secrets. Signed
+# actions (propose, execute) run in the network's environment, which holds PROPOSER_PRIVATE_KEY and whose
+# required reviewers (with self-review prevented) provide the dispatcher-plus-approver sign-off.
+on:
+  workflow_dispatch:
+    inputs:
+      network:
+        description: Target network
+        required: true
+        type: choice
+        options:
+          - Calibnet
+          - Mainnet
+      target:
+        description: Contract to upgrade
+        required: true
+        type: choice
+        options:
+          - sra
+          - swa
+      action:
+        description: Step to run
+        required: true
+        type: choice
+        options:
+          - rehearse
+          - propose
+          - status
+          - execute
+          - verify
+      new_implementation:
+        description: New implementation address (required for propose, status and execute; optional for rehearse)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upgrade-${{ inputs.network }}-${{ inputs.target }}
+  cancel-in-progress: false
+
+jobs:
+  readonly:
+    if: ${{ inputs.action == 'rehearse' || inputs.action == 'status' || inputs.action == 'verify' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.7.1
+          cache: true
+
+      - name: Select network
+        run: |
+          case "${{ inputs.network }}" in
+            Calibnet) echo "ETH_RPC_URL=https://api.calibration.node.glif.io/rpc/v1" >> "$GITHUB_ENV" ;;
+            Mainnet)  echo "ETH_RPC_URL=https://api.node.glif.io/rpc/v1" >> "$GITHUB_ENV" ;;
+          esac
+
+      - name: Run ${{ inputs.action }}
+        env:
+          TARGET: ${{ inputs.target }}
+          NEW_IMPLEMENTATION: ${{ inputs.new_implementation }}
+        run: |
+          set -o pipefail
+          case "${{ inputs.action }}" in
+            rehearse)
+              forge script script/Rehearse.s.sol --rpc-url "$ETH_RPC_URL" 2>&1 | tee "$RUNNER_TEMP/out.txt" ;;
+            status)
+              tools/upgrade.sh "$TARGET" "$NEW_IMPLEMENTATION" status 2>&1 | tee "$RUNNER_TEMP/out.txt" ;;
+            verify)
+              forge script script/Verify.s.sol --rpc-url "$ETH_RPC_URL" 2>&1 | tee "$RUNNER_TEMP/out.txt" ;;
+          esac
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "## ${{ inputs.action }} ${{ inputs.target }} on ${{ inputs.network }} (\`${GITHUB_SHA::8}\`)"
+            echo '```'
+            grep -vE '^\s*$|^Compiling|^Solc|^Compiler|^No files' "$RUNNER_TEMP/out.txt" | tail -60
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  signed:
+    if: ${{ inputs.action == 'propose' || inputs.action == 'execute' }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.network == 'Mainnet' && 'mainnet' || 'calibnet' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.7.1
+          cache: true
+
+      - name: Select network
+        run: |
+          case "${{ inputs.network }}" in
+            Calibnet) echo "ETH_RPC_URL=https://api.calibration.node.glif.io/rpc/v1" >> "$GITHUB_ENV" ;;
+            Mainnet)  echo "ETH_RPC_URL=https://api.node.glif.io/rpc/v1" >> "$GITHUB_ENV" ;;
+          esac
+
+      - name: Run ${{ inputs.action }}
+        env:
+          PROPOSER_PRIVATE_KEY: ${{ secrets.PROPOSER_PRIVATE_KEY }}
+        run: |
+          set -o pipefail
+          test -n "${{ inputs.new_implementation }}" || { echo "new_implementation is required" >&2; exit 1; }
+          tools/upgrade.sh "${{ inputs.target }}" "${{ inputs.new_implementation }}" "${{ inputs.action }}" 2>&1 \
+            | tee "$RUNNER_TEMP/out.txt"
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "## ${{ inputs.action }} ${{ inputs.target }} on ${{ inputs.network }} (\`${GITHUB_SHA::8}\`, by @${{ github.actor }})"
+            echo '```'
+            grep -vE '^\s*$|^Compiling|^Solc|^Compiler|^No files' "$RUNNER_TEMP/out.txt" | tail -60
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

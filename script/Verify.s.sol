@@ -57,9 +57,28 @@ contract VerifyScript is DeploymentScript, BytecodeCheck {
 
         _verifySra(config, sra);
         _verifySwa(config, sra, swa);
+        _checkRecordedImplementation(json, key, "sraImplementation", sra);
+        _checkRecordedImplementation(json, key, "swaImplementation", swa);
 
         console.log("");
         console.log("ALL CHECKS PASSED");
+    }
+
+    /// @dev Upgrades record the live implementation in deployments.json (`sraImplementation`, `swaImplementation`).
+    ///      When the key is present and nonzero it must match the proxy's ERC-1967 slot.
+    function _checkRecordedImplementation(string memory json, string memory key, string memory field, address proxy)
+        internal
+        view
+    {
+        string memory path = string.concat(key, ".", field);
+        if (!json.keyExists(path)) return;
+        address recorded = json.readAddress(path);
+        if (recorded == address(0)) return;
+        require(
+            _implementationOf(proxy) == recorded,
+            string.concat(field, ": deployments.json does not match the proxy's implementation slot")
+        );
+        console.log(string.concat("[", field, "] deployments.json matches implementation slot"));
     }
 
     function _verifySra(Config memory config, address proxy) internal {

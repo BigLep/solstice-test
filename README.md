@@ -33,14 +33,13 @@ The SWA implementation binds to the existing SRA proxy recorded in `deployments.
 forge script script/DeployImplementation.s.sol --broadcast --verify --rpc-url $ETH_RPC_URL --skip-simulation
 ```
 
-### Verify, rehearse, upgrade
+### Upgrades
+Implementation upgrades run through the `Upgrade` workflow (`.github/workflows/upgrade.yml`): rehearse, propose to the owner Safes, track the hold, execute, verify. The runbook is [docs/UPGRADE.md](docs/UPGRADE.md); [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) covers new networks. Under the hood:
 * `script/Verify.s.sol`: read-only check that the live proxies and implementations match the checked-out source and `deployments.json`.
 * `script/Rehearse.s.sol`: full upgrade dry run in a local fork (impersonated owners, hold, execute, verify).
 * `script/Upgrade.s.sol`: verifies a new implementation against a local build and prints the `upgradeToAndCall` calldata and task id.
-* `tools/upgrade.sh`: wraps the above to propose the upgrade to both owner Safes, track the hold and execute.
+* `tools/upgrade.sh`: proposes to both owner Safes via the Safe Transaction Service, reports task status, executes.
 * `tools/storage-layout-snapshot.sh`: CI gate for ERC-7201 namespaced storage; fails non-append-only changes.
-
-Runbooks: [docs/UPGRADE.md](docs/UPGRADE.md) (the main one) and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) (nv29 addresses and new networks).
 
 ## Deploy Contract workflow
 `.github/workflows/deploy-contract.yml` runs either script from GitHub Actions.
