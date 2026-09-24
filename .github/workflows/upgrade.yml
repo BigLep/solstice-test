@@ -58,6 +58,9 @@ jobs:
           version: v1.7.1
           cache: true
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
       - name: Select network
         run: |
           case "${{ inputs.network }}" in
@@ -75,7 +78,7 @@ jobs:
             rehearse)
               forge script script/Rehearse.s.sol --rpc-url "$ETH_RPC_URL" 2>&1 | tee "$RUNNER_TEMP/out.txt" ;;
             status)
-              tools/upgrade.sh "$TARGET" "$NEW_IMPLEMENTATION" status 2>&1 | tee "$RUNNER_TEMP/out.txt" ;;
+              uv run --quiet tools/upgrade.py "$TARGET" "$NEW_IMPLEMENTATION" status 2>&1 | tee "$RUNNER_TEMP/out.txt" ;;
             verify)
               forge script script/Verify.s.sol --rpc-url "$ETH_RPC_URL" 2>&1 | tee "$RUNNER_TEMP/out.txt" ;;
           esac
@@ -134,6 +137,9 @@ jobs:
           version: v1.7.1
           cache: true
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
       - name: Select network
         run: |
           case "${{ inputs.network }}" in
@@ -149,7 +155,7 @@ jobs:
         run: |
           set -o pipefail
           test -n "${{ inputs.new_implementation }}" || { echo "new_implementation is required" >&2; exit 1; }
-          tools/upgrade.sh "${{ inputs.target }}" "${{ inputs.new_implementation }}" "${{ inputs.action }}" 2>&1 \
+          uv run --quiet tools/upgrade.py "${{ inputs.target }}" "${{ inputs.new_implementation }}" "${{ inputs.action }}" 2>&1 \
             | tee "$RUNNER_TEMP/out.txt"
 
       - name: Job summary

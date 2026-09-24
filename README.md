@@ -38,7 +38,7 @@ Versions are bumped in `version.json` with notes in `CHANGELOG.md`; the `Release
 * `script/Verify.s.sol`: read-only check that the live proxies and implementations match the checked-out source and `deployments.json`.
 * `script/Rehearse.s.sol`: full upgrade dry run in a local fork (impersonated owners, hold, execute, verify).
 * `script/Upgrade.s.sol`: verifies a new implementation against a local build and prints the `upgradeToAndCall` calldata and task id.
-* `tools/upgrade.sh`: proposes to both owner Safes via the Safe Transaction Service, reports task status, executes.
+* `tools/upgrade.py` (run with `uv run`): proposes to both owner Safes via the Safe Transaction Service using safe-eth-py, reports task status, executes, and registers a proposer.
 * `tools/storage_layout.py` with `test/layout/StorageLayoutProbe.sol` and `test/StorageSlots.t.sol`: CI gate for ERC-7201 namespaced storage; fails non-append-only changes and pins slot constants.
 
 ## Deploy Contract workflow
