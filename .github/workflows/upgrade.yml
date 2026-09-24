@@ -1,10 +1,11 @@
 name: Upgrade
 
 # One step of an SRA/SWA implementation upgrade, run from the Actions tab so the record lives in a workflow run.
-# See docs/UPGRADE.md for the sequence. Read-only actions (rehearse, status, verify) need no secrets. Signed
-# actions (propose, execute) run in the network's environment, which holds DEPLOYER_PRIVATE_KEY and whose
-# required reviewers (with self-review prevented) provide the dispatcher-plus-approver sign-off. Always dispatch
-# with the release tag as the ref.
+# See docs/UPGRADE.md for the sequence. Always dispatch with the release tag as the ref.
+#   rehearse, status  read-only, no secrets
+#   verify            read-only on chain; appends the result to the GitHub release (contents: write)
+#   propose, execute  run in the network's environment, which holds DEPLOYER_PRIVATE_KEY and whose required
+#                     reviewers (with self-review prevented) provide the dispatcher-plus-approver sign-off
 on:
   workflow_dispatch:
     inputs:
@@ -37,56 +38,65 @@ on:
         required: false
         type: string
 
+permissions:
+  contents: read
+
 concurrency:
   group: upgrade-${{ inputs.network }}-${{ inputs.target }}
   cancel-in-progress: false
 
+env:
+  TARGET: ${{ inputs.target }}
+  NEW_IMPLEMENTATION: ${{ inputs.new_implementation }}
+  ACTION: ${{ inputs.action }}
+
 jobs:
   readonly:
-    if: ${{ inputs.action == 'rehearse' || inputs.action == 'status' || inputs.action == 'verify' }}
+    if: ${{ inputs.action == 'rehearse' || inputs.action == 'status' }}
     runs-on: ubuntu-latest
-    permissions:
-      contents: write # verify appends to the release
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
-
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
+      - uses: ./.github/actions/setup
         with:
-          version: v1.7.1
-          cache: true
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
-
-      - name: Select network
-        run: |
-          case "${{ inputs.network }}" in
-            Calibnet) echo "CHAIN_ID=314159" >> "$GITHUB_ENV"; echo "ETH_RPC_URL=https://api.calibration.node.glif.io/rpc/v1" >> "$GITHUB_ENV" ;;
-            Mainnet)  echo "CHAIN_ID=314"    >> "$GITHUB_ENV"; echo "ETH_RPC_URL=https://api.node.glif.io/rpc/v1" >> "$GITHUB_ENV" ;;
-          esac
-
-      - name: Run ${{ inputs.action }}
-        env:
-          TARGET: ${{ inputs.target }}
-          NEW_IMPLEMENTATION: ${{ inputs.new_implementation }}
+          network: ${{ inputs.network }}
+      - name: Run
         run: |
           set -o pipefail
-          case "${{ inputs.action }}" in
+          case "$ACTION" in
             rehearse)
               forge script script/Rehearse.s.sol --rpc-url "$ETH_RPC_URL" 2>&1 | tee "$RUNNER_TEMP/out.txt" ;;
             status)
-              uv run --quiet tools/upgrade.py "$TARGET" "$NEW_IMPLEMENTATION" status 2>&1 | tee "$RUNNER_TEMP/out.txt" ;;
-            verify)
-              forge script script/Verify.s.sol --rpc-url "$ETH_RPC_URL" 2>&1 | tee "$RUNNER_TEMP/out.txt" ;;
+              [[ "$NEW_IMPLEMENTATION" =~ ^0x[0-9a-fA-F]{40}$ ]] || { echo "new_implementation must be a 0x address" >&2; exit 1; }
+              uv run --quiet --locked tools/upgrade.py "$TARGET" "$NEW_IMPLEMENTATION" status 2>&1 | tee "$RUNNER_TEMP/out.txt" ;;
           esac
+      - uses: ./.github/actions/summary
+        if: always()
+        with:
+          title: "${{ inputs.action }} ${{ inputs.target }} on ${{ inputs.network }} (${{ github.sha }})"
+          log: ${{ runner.temp }}/out.txt
 
+  verify:
+    if: ${{ inputs.action == 'verify' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # appends the result to the release
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: ./.github/actions/setup
+        with:
+          network: ${{ inputs.network }}
+      - name: Run
+        run: |
+          set -o pipefail
+          forge script script/Verify.s.sol --rpc-url "$ETH_RPC_URL" 2>&1 | tee "$RUNNER_TEMP/out.txt"
       - name: Record verification in the release
-        if: ${{ inputs.action == 'verify' }}
         env:
           GH_TOKEN: ${{ github.token }}
+          NETWORK: ${{ inputs.network }}
         run: |
           set -euo pipefail
           TAG=$(jq -r .version version.json)
@@ -102,68 +112,41 @@ jobs:
           EPOCH=$(cast block-number --rpc-url "$ETH_RPC_URL")
           gh release view "$TAG" --json body -q .body > notes.md
           printf '\n\n**Verified on %s** at epoch %s from `%s` ([run](%s/%s/actions/runs/%s)): SRA implementation `%s`, SWA implementation `%s`.\n' \
-            "${{ inputs.network }}" "$EPOCH" "${GITHUB_SHA::8}" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$SRA_IMPL" "$SWA_IMPL" >> notes.md
-          if [ "${{ inputs.network }}" = "Mainnet" ]; then
+            "$NETWORK" "$EPOCH" "${GITHUB_SHA::8}" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$SRA_IMPL" "$SWA_IMPL" >> notes.md
+          if [ "$NETWORK" = "Mainnet" ]; then
             gh release edit "$TAG" --notes-file notes.md --prerelease=false --latest
             echo "promoted $TAG to a release"
           else
             gh release edit "$TAG" --notes-file notes.md
           fi
-
-      - name: Job summary
+      - uses: ./.github/actions/summary
         if: always()
-        run: |
-          {
-            echo "## ${{ inputs.action }} ${{ inputs.target }} on ${{ inputs.network }} (\`${GITHUB_SHA::8}\`)"
-            echo '```'
-            grep -vE '^\s*$|^Compiling|^Solc|^Compiler|^No files' "$RUNNER_TEMP/out.txt" | tail -60
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+        with:
+          title: "verify on ${{ inputs.network }} (${{ github.sha }})"
+          log: ${{ runner.temp }}/out.txt
 
   signed:
     if: ${{ inputs.action == 'propose' || inputs.action == 'execute' }}
     runs-on: ubuntu-latest
     environment: ${{ inputs.network == 'Mainnet' && 'mainnet' || 'calibnet' }}
-    permissions:
-      contents: read
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
-
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
+      - uses: ./.github/actions/setup
         with:
-          version: v1.7.1
-          cache: true
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
-
-      - name: Select network
-        run: |
-          case "${{ inputs.network }}" in
-            Calibnet) echo "ETH_RPC_URL=https://api.calibration.node.glif.io/rpc/v1" >> "$GITHUB_ENV" ;;
-            Mainnet)  echo "ETH_RPC_URL=https://api.node.glif.io/rpc/v1" >> "$GITHUB_ENV" ;;
-          esac
-
-      - name: Run ${{ inputs.action }}
+          network: ${{ inputs.network }}
+      - name: Run
         env:
           # One operations key: it deploys implementations (Deploy Contract), proposes (registered as a proposer
           # on the owner Safes) and executes. It has no power over the contracts.
           PROPOSER_PRIVATE_KEY: ${{ secrets.DEPLOYER_PRIVATE_KEY }}
         run: |
           set -o pipefail
-          test -n "${{ inputs.new_implementation }}" || { echo "new_implementation is required" >&2; exit 1; }
-          uv run --quiet tools/upgrade.py "${{ inputs.target }}" "${{ inputs.new_implementation }}" "${{ inputs.action }}" 2>&1 \
-            | tee "$RUNNER_TEMP/out.txt"
-
-      - name: Job summary
+          [[ "$NEW_IMPLEMENTATION" =~ ^0x[0-9a-fA-F]{40}$ ]] || { echo "new_implementation must be a 0x address" >&2; exit 1; }
+          uv run --quiet --locked tools/upgrade.py "$TARGET" "$NEW_IMPLEMENTATION" "$ACTION" 2>&1 | tee "$RUNNER_TEMP/out.txt"
+      - uses: ./.github/actions/summary
         if: always()
-        run: |
-          {
-            echo "## ${{ inputs.action }} ${{ inputs.target }} on ${{ inputs.network }} (\`${GITHUB_SHA::8}\`, by @${{ github.actor }})"
-            echo '```'
-            grep -vE '^\s*$|^Compiling|^Solc|^Compiler|^No files' "$RUNNER_TEMP/out.txt" | tail -60
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+        with:
+          title: "${{ inputs.action }} ${{ inputs.target }} on ${{ inputs.network }} (${{ github.sha }}, by ${{ github.actor }})"
+          log: ${{ runner.temp }}/out.txt

@@ -37,7 +37,7 @@ forge script script/DeployImplementation.s.sol --broadcast --verify --rpc-url $E
 Versions are bumped in `version.json` with notes in `CHANGELOG.md`; the `Releaser` workflow tags and pre-releases them. Implementation upgrades run through the `Upgrade` workflow (`.github/workflows/upgrade.yml`): rehearse, propose to the owner Safes, track the hold, execute, verify (which records into the release). The runbook is [docs/UPGRADE.md](docs/UPGRADE.md); [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) covers new networks. Under the hood:
 * `script/Verify.s.sol`: read-only check that the live proxies and implementations match the checked-out source and `deployments.json`.
 * `script/Rehearse.s.sol`: full upgrade dry run in a local fork (impersonated owners, hold, execute, verify).
-* `script/Upgrade.s.sol`: verifies a new implementation against a local build and prints the `upgradeToAndCall` calldata and task id.
+* `script/Upgrade.s.sol`: verifies a deployed implementation against a local build and prints the `upgradeToAndCall` calldata and task id. `script/UpgradeBase.sol` holds what the three scripts share.
 * `tools/upgrade.py` (run with `uv run`): proposes to both owner Safes via the Safe Transaction Service using safe-eth-py, reports task status, executes, and registers a proposer.
 * `tools/storage_layout.py` with `test/layout/StorageLayoutProbe.sol` and `test/StorageSlots.t.sol`: CI gate for ERC-7201 namespaced storage; fails non-append-only changes and pins slot constants.
 

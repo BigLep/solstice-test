@@ -21,6 +21,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Create tag and pre-release
         env:
@@ -41,7 +43,14 @@ jobs:
             exit 1
           fi
           if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-            echo "tag $TAG exists; creating the release on it"
+            # A pre-existing tag is accepted only if its commit is on this branch's history, so a tag someone
+            # pushed at an unrelated commit cannot become the official release.
+            git fetch --quiet origin "refs/tags/$TAG:refs/tags/$TAG"
+            if ! git merge-base --is-ancestor "$TAG^{commit}" "$GITHUB_SHA"; then
+              echo "tag $TAG exists but its commit is not an ancestor of $GITHUB_SHA; refusing" >&2
+              exit 1
+            fi
+            echo "tag $TAG exists on this history; creating the release on it"
             gh release create "$TAG" --prerelease --title "$TAG" --notes-file notes.md
           else
             gh release create "$TAG" --target "$GITHUB_SHA" --prerelease --title "$TAG" --notes-file notes.md

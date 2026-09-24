@@ -5,8 +5,9 @@
 # ///
 """Stage, propose, track and execute a UUPS upgrade of the SRA or SWA proxy recorded in deployments.json.
 
-  uv run tools/upgrade.py <sra|swa> <new-implementation> calldata   verify the implementation, print calldata
-  uv run tools/upgrade.py <sra|swa> <new-implementation> propose    ...and queue it on both owner Safes
+  uv run tools/upgrade.py <sra|swa> <new-implementation> propose    verify the implementation, print calldata,
+                                                                    queue it on both owner Safes (DRY_RUN=1 to
+                                                                    stop before posting)
   uv run tools/upgrade.py <sra|swa> <new-implementation> status     approvals and when the hold ends
   uv run tools/upgrade.py <sra|swa> <new-implementation> execute    send the upgrade once the hold has elapsed
   uv run tools/upgrade.py register-proposer <safe> <proposer>       one-time: an owner-signer of <safe> registers
@@ -20,7 +21,7 @@ Environment:
   UPGRADE_CALLDATA        optional `data` for upgradeToAndCall (a reinitializer call); default empty
   DRY_RUN=1               for propose: print the Safe transactions instead of submitting them
 
-`calldata` and `propose` first run script/Upgrade.s.sol, which rebuilds the implementation from the checked-out
+`propose` first runs script/Upgrade.s.sol, which rebuilds the implementation from the checked-out
 source and deployments.json and refuses to continue unless the on-chain runtime code matches, so the calldata
 always refers to code built from this commit. `propose` then builds the same Safe transaction for each owner
 Safe, signs it with the proposer key and posts it to the Filecoin Safe Transaction Service; owners confirm and
@@ -56,6 +57,15 @@ def die(msg):
     sys.exit(1)
 
 
+def parse_hex(value, name):
+    """Hex bytes with or without a 0x prefix; anything else is an error rather than silently truncated."""
+    raw = value[2:] if value.lower().startswith("0x") else value
+    try:
+        return bytes.fromhex(raw)
+    except ValueError:
+        die(f"{name} must be hex (got {value!r})")
+
+
 class Upgrade:
     def __init__(self, target, new_impl):
         rpc = os.environ.get("ETH_RPC_URL") or die("ETH_RPC_URL is required")
@@ -68,7 +78,7 @@ class Upgrade:
         self.owners = [to_checksum_address(cfg[f"{target}Owner1"]), to_checksum_address(cfg[f"{target}Owner2"])]
         self.hold = int(cfg["hold"])
         self.new_impl = to_checksum_address(new_impl)
-        data = bytes.fromhex(os.environ.get("UPGRADE_CALLDATA", "0x")[2:])
+        data = parse_hex(os.environ.get("UPGRADE_CALLDATA", "0x"), "UPGRADE_CALLDATA")
         self.calldata = UPGRADE_SELECTOR + encode(["address", "bytes"], [self.new_impl, data])
         self.task_id = keccak(self.calldata)
         self.task_slot = keccak(encode(["bytes32", "bytes32"], [self.task_id, PENDING_TASKS_SLOT]))
@@ -99,8 +109,8 @@ class Upgrade:
             print("\n".join(tail), file=sys.stderr)
             die("implementation did not verify; not continuing")
         lines = r.stdout.splitlines()
-        idx = next(i for i, l in enumerate(lines) if "send this exact calldata" in l)
-        if lines[idx + 1].strip() != "0x" + self.calldata.hex():
+        marker = [i for i, l in enumerate(lines) if "send this exact calldata" in l]
+        if not marker or lines[marker[0] + 1].strip() != "0x" + self.calldata.hex():
             die("calldata mismatch between script/Upgrade.s.sol and this tool")
         print("implementation runtime code matches the local build")
 
@@ -198,18 +208,18 @@ def register_proposer(safe_address, proposer):
     signature = signer.unsafe_sign_hash(message_hash).signature
     api.add_delegate(proposer, signer.address, "solstice operations key", signature, safe_address=safe_address)
     print(f"registered {proposer} as a proposer on {safe_address} (signed by {signer.address}) via {base_url}")
-    print("current proposers:", [d.delegate for d in api.get_delegates(safe_address)])
+    print("current proposers:", [d["delegate"] for d in api.get_delegates(safe_address)])
 
 
 def main(argv):
     if len(argv) == 4 and argv[1] == "register-proposer":
         return register_proposer(argv[2], argv[3])
-    if len(argv) != 4 or argv[1] not in ("sra", "swa") or argv[3] not in ("calldata", "propose", "status", "execute"):
+    if len(argv) != 4 or argv[1] not in ("sra", "swa") or argv[3] not in ("propose", "status", "execute"):
         print(__doc__, file=sys.stderr)
         return 2
     u = Upgrade(argv[1], argv[2])
     mode = argv[3]
-    if mode in ("calldata", "propose"):
+    if mode == "propose":
         u.verify()
     u.summary()
     if mode == "status":

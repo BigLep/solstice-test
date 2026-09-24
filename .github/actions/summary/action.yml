@@ -1,0 +1,23 @@
+name: Job summary
+description: Append the tail of a command log to the job summary.
+inputs:
+  title:
+    description: Heading for the summary section
+    required: true
+  log:
+    description: Path to the captured output
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        TITLE: ${{ inputs.title }}
+        LOG: ${{ inputs.log }}
+      run: |
+        {
+          echo "## $TITLE"
+          echo '```'
+          grep -vE '^\s*$|^Compiling|^Solc|^Compiler|^No files' "$LOG" 2>/dev/null | tail -60
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"

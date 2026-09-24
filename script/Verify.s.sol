@@ -2,33 +2,30 @@
 pragma solidity ^0.8.36;
 
 import {console} from "forge-std/console.sol";
-import {stdJson} from "forge-std/StdJson.sol";
 
-import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {IERC1822Proxiable} from "@openzeppelin/contracts/interfaces/draft-IERC1822.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 import {ServiceRewardsActor} from "../src/ServiceRewardsActor.sol";
 import {Epoch} from "../src/lib/Epoch.sol";
 import {UnanimousProxied} from "../src/lib/UnanimousProxied.sol";
-import {BytecodeCheck} from "./BytecodeCheck.sol";
-import {DeploymentScript} from "./DeploymentScript.sol";
+import {UpgradeBase} from "./UpgradeBase.sol";
 
-/// @notice Read-only post-deployment verification for the SRA and SWA proxies recorded in `deployments.json`.
+/// @notice Read-only verification of the SRA and SWA proxies recorded in `deployments.json`, valid both right
+///         after deployment and after any number of upgrades.
 /// @dev Run against a live chain with no `--broadcast`:
 ///
 ///        forge script script/Verify.s.sol --rpc-url $ETH_RPC_URL
 ///
 ///      The script rebuilds both implementations and both proxies locally from the same source, compiler
-///      settings and `deployments.json` config, then compares the resulting runtime code hashes against the
-///      live contracts. Because immutables (owners, hold, orchestrator, epoch parameters, SWA's SRA pointer)
-///      are baked into runtime code, a matching code hash proves every constructor argument. It then checks
-///      the ERC-1967 implementation slot, the Initializable version, the seated owners, and the effects of
-///      each `initialize()`. Any failure reverts with a message naming the check.
-contract VerifyScript is DeploymentScript, BytecodeCheck {
-    using stdJson for string;
-
-    /// @dev ERC1967Utils.IMPLEMENTATION_SLOT
-    bytes32 internal constant IMPLEMENTATION_SLOT = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
+///      settings and `deployments.json` config, then compares the resulting runtime code against the live
+///      contracts. Because immutables (owners, hold, orchestrator, epoch parameters, SWA's SRA pointer) are
+///      baked into runtime code, a matching code hash proves every constructor argument. It then checks the
+///      ERC-1967 slot, that the proxy is initialized, that the owner set is exactly the two configured owners,
+///      and that the namespaced state each `initialize()` seeds is present (at least one admitted orchestrator,
+///      gate parameters set). It does not assume deployment-time values for state that legitimately changes.
+///      Any failure reverts with a message naming the check.
+contract VerifyScript is UpgradeBase {
     /// @dev OpenZeppelin Initializable ERC-7201 slot: uint64 _initialized | bool _initializing (byte 8)
     bytes32 internal constant INITIALIZABLE_STORAGE =
         0xf0c57e16840df040f15088dc2f81fe391c3923bec73e23a9662efc9c229c6a00;
@@ -37,15 +34,12 @@ contract VerifyScript is DeploymentScript, BytecodeCheck {
     /// @dev GateParamsLibrary.GATE_PARAMS_SLOT (erc7201:Solstice.GateParams)
     bytes32 internal constant GATE_PARAMS_SLOT = 0xf9abab00248d945495524c8caf6be2b837274c1becd1964fb3775f62fd6e4600;
 
-    uint256 internal constant EXPECTED_GATE_BASE = 3500 ether;
-    uint256 internal constant EXPECTED_GATE_STEP_RATIO = 2.7 ether;
-
     function run() public virtual returns (address sra, address swa) {
         string memory key = _configKey();
         string memory json = vm.readFile(CONFIG_PATH);
         Config memory config = _loadConfig(json, key);
-        sra = json.readAddress(string.concat(key, ".sra"));
-        swa = json.readAddress(string.concat(key, ".swa"));
+        sra = _readAddress(json, key, "sra");
+        swa = _readAddress(json, key, "swa");
 
         require(sra != address(0) && swa != address(0), "deployments.json has no sra/swa address for this chain");
         require(sra.code.length != 0, "sra proxy has no code");
@@ -67,7 +61,6 @@ contract VerifyScript is DeploymentScript, BytecodeCheck {
         console.log("");
         console.log("[SRA] implementation", implementation);
 
-        // Rebuild locally (never broadcast) with identical constructor args and compare runtime code.
         address expected = _deploySraImplementation(config);
         _checkCode("SRA implementation", implementation, expected);
         _checkProxy("SRA", proxy, expected);
@@ -76,14 +69,13 @@ contract VerifyScript is DeploymentScript, BytecodeCheck {
         _checkOwners("SRA", proxy, config.sraOwner1, config.sraOwner2);
 
         ServiceRewardsActor actor = ServiceRewardsActor(proxy);
-        require(actor.isAdmitted(config.initialOrchestrator), "SRA: initial orchestrator not admitted");
-        require(actor.admittedCount() == 1, "SRA: admittedCount != 1");
+        require(actor.admittedCount() >= 1, "SRA: no admitted orchestrator");
         require(
             Epoch.unwrap(actor.EPOCHS_PER_QUARTER()) == Epoch.unwrap(config.epochsPerQuarter),
             "SRA: EPOCHS_PER_QUARTER mismatch"
         );
         require(Epoch.unwrap(actor.SRA_UPGRADE_HOLD()) == Epoch.unwrap(config.hold), "SRA: SRA_UPGRADE_HOLD mismatch");
-        console.log("[SRA] initial orchestrator admitted, epoch params match");
+        console.log("[SRA] orchestrator registry seeded, epoch params match");
     }
 
     function _verifySwa(Config memory config, address sraProxy, address proxy) internal {
@@ -99,24 +91,18 @@ contract VerifyScript is DeploymentScript, BytecodeCheck {
         _checkInitialized("SWA", proxy);
         _checkOwners("SWA", proxy, config.swaOwner1, config.swaOwner2);
 
-        // GateParamsLibrary.init(): lastCheckedQuarter = 1 at word 0; params.target.base at word 1;
-        // params.target.stepRatio at word 2.
-        uint256 word0 = uint256(vm.load(proxy, GATE_PARAMS_SLOT));
+        // GateParamsLibrary.init() seeds lastCheckedQuarter (word 0) and params.target.base (word 1); both
+        // legitimately change later (quarterly checks, setGateParams), so only require them to be set.
+        uint256 lastCheckedQuarter = uint64(uint256(vm.load(proxy, GATE_PARAMS_SLOT)));
         uint256 base = uint256(vm.load(proxy, bytes32(uint256(GATE_PARAMS_SLOT) + 1)));
-        uint256 stepRatio = uint256(vm.load(proxy, bytes32(uint256(GATE_PARAMS_SLOT) + 2)));
-        require(uint64(word0) == 1, "SWA: gate lastCheckedQuarter != 1");
-        require(base == EXPECTED_GATE_BASE, "SWA: gate base mismatch");
-        require(stepRatio == EXPECTED_GATE_STEP_RATIO, "SWA: gate stepRatio mismatch");
-        console.log("[SWA] gate params initialized");
+        require(lastCheckedQuarter >= 1, "SWA: gate params not initialized (lastCheckedQuarter == 0)");
+        require(base != 0, "SWA: gate params not initialized (base == 0)");
+        console.log("[SWA] gate params present");
     }
 
     // ------------------------------------------------------------------------
     // Checks
     // ------------------------------------------------------------------------
-
-    function _implementationOf(address proxy) internal view returns (address) {
-        return address(uint160(uint256(vm.load(proxy, IMPLEMENTATION_SLOT))));
-    }
 
     /// @dev Compares the proxy's runtime code to a locally constructed ERC1967Proxy. The proxy has no
     ///      immutables, so this proves it is an unmodified OpenZeppelin ERC1967Proxy built with our settings.
@@ -134,12 +120,13 @@ contract VerifyScript is DeploymentScript, BytecodeCheck {
         );
     }
 
+    /// @dev Initialized at version 1 by deployment; a later reinitializer(n) upgrade raises it to n.
     function _checkInitialized(string memory label, address proxy) internal view {
         uint256 word = uint256(vm.load(proxy, INITIALIZABLE_STORAGE));
         uint64 initialized = uint64(word);
         bool initializing = uint8(word >> 64) != 0;
         console.log(string.concat("[", label, "] initialized version"), initialized);
-        require(initialized == 1, string.concat(label, ": initialized version != 1"));
+        require(initialized >= 1, string.concat(label, ": not initialized"));
         require(!initializing, string.concat(label, ": still initializing"));
     }
 

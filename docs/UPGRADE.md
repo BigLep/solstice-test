@@ -30,17 +30,19 @@ Calibration first, then mainnet, from the same tag. Steps 2 to 7 are dispatches 
 
 Use the [upgrade issue template](https://github.com/filecoin-project/solstice/issues/new?template=upgrade.md) ([source](../.github/ISSUE_TEMPLATE/upgrade.md)). Progress and decisions go in issue comments; the durable record (addresses, transaction hashes) accumulates in the release automatically.
 
+A change to SRA or SWA behaviour is a protocol change: it needs an accepted [FIP](https://github.com/filecoin-project/FIPs) before it ships, and the owner Safes approve on the strength of that FIP. Link the FIP in the issue before step 1; a fix with no behaviour change (for example a gas or safety fix that the FIP already permits) needs a note in the issue saying so instead.
+
 ### 1. Merge
 
 The PR carries the code change, the next version in [`version.json`](../version.json), and its notes under that version's heading in [`CHANGELOG.md`](../CHANGELOG.md). CI does the safety checks: the [Storage Layout workflow](https://github.com/filecoin-project/solstice/actions/workflows/storage-layout.yml) ([source](../.github/workflows/storage-layout.yml)) fails any change to the namespaced structs that is not append-only, using the compiler's layout of [`StorageLayoutProbe`](../test/layout/StorageLayoutProbe.sol) via [`tools/storage_layout.py`](../tools/storage_layout.py); [`StorageSlots.t.sol`](../test/StorageSlots.t.sol) pins every slot constant to its ERC-7201 derivation; and [`UnanimousProxied.t.sol`](../test/UnanimousProxied.t.sol) covers the governance paths. If the layout check fails, the change needs a storage migration, which this runbook does not cover; stop and design that first. On merge, the [Releaser workflow](https://github.com/filecoin-project/solstice/actions/workflows/releaser.yml) tags the commit and creates the pre-release. Link it from the issue.
 
 ### 2. Rehearse
 
-Dispatch [Upgrade](https://github.com/filecoin-project/solstice/actions/workflows/upgrade.yml) with action `rehearse`, network Calibnet, ref the tag. It runs [`script/Rehearse.s.sol`](../script/Rehearse.s.sol): a local fork in which the implementation is built from source, both owner Safes are impersonated to submit and approve, early execution is shown to revert, the hold is rolled past, the upgrade executes, and every verifier check runs. The summary ends with `REHEARSAL COMPLETE` or the failing step. Nothing is sent.
+Dispatch [Upgrade](https://github.com/filecoin-project/solstice/actions/workflows/upgrade.yml) with action `rehearse`, network Calibnet, target `sra` then again with `swa`, ref the tag. It runs [`script/Rehearse.s.sol`](../script/Rehearse.s.sol): a local fork in which the implementation is built from source, both owner Safes are impersonated to submit and approve, early execution is shown to revert, the hold is rolled past, the upgrade executes, and every verifier check runs. The summary ends with `REHEARSAL COMPLETE` or the failing step. Nothing is sent.
 
 ### 3. Deploy the implementation
 
-Dispatch [Deploy Contract](https://github.com/filecoin-project/solstice/actions/workflows/deploy-contract.yml) with target "Implementations only", dry run off, ref the tag. It deploys both implementations from the tag and verifies them on Sourcify; if only one contract changed, ignore the other address. Take the address from the run summary.
+Dispatch [Deploy Contract](https://github.com/filecoin-project/solstice/actions/workflows/deploy-contract.yml) with target "Implementations only", dry run off, ref the tag. It deploys both implementations from the tag and verifies them on Sourcify. Upgrade both contracts every time, even if only one changed: the verifier rebuilds both from the tag, and shared code (governance, epoch and gate libraries) means either bytecode can change when the other does. Take both addresses from the run summary.
 
 ### 4. Propose to the owners
 
@@ -50,17 +52,22 @@ Note: if there is an issue with [Safe's proposer functionality](https://help.saf
 
 ### 5. Track the hold
 
-Dispatch [Upgrade](https://github.com/filecoin-project/solstice/actions/workflows/upgrade.yml) with action `status`. The summary shows how many owners have approved and the epoch the hold ends. If something is wrong, either owner cancels with the veto calldata printed in the same summary.
+Dispatch [Upgrade](https://github.com/filecoin-project/solstice/actions/workflows/upgrade.yml) with action `status`, the target and the new implementation address. The summary shows how many owners have approved and the epoch the hold ends. If something is wrong, either owner cancels with the veto calldata printed in the same summary.
 
 ### 6. Execute
 
-After the hold, dispatch [Upgrade](https://github.com/filecoin-project/solstice/actions/workflows/upgrade.yml) with action `execute`. Anyone may execute, but running it through the workflow keeps the record in one place.
+After the hold, dispatch [Upgrade](https://github.com/filecoin-project/solstice/actions/workflows/upgrade.yml) with action `execute`, the target and the new implementation address. Anyone may execute, but running it through the workflow keeps the record in one place.
 
 ### 7. Verify
 
 Dispatch [Upgrade](https://github.com/filecoin-project/solstice/actions/workflows/upgrade.yml) with action `verify`. It runs [`script/Verify.s.sol`](../script/Verify.s.sol), which rebuilds both implementations and proxies from the tag and checks them against the live contracts, ending with `ALL CHECKS PASSED` or the failed check. On success the run appends the live implementation addresses and epoch to the release; on mainnet it also promotes the pre-release to the release. `deployments.json` does not change: proxies are the only addresses it records, and the chain is the source of truth for what is behind them.
 
 Repeat steps 3 to 7 on mainnet.
+
+## Rollback
+
+- Before execution, rollback is a veto: either owner sends the veto calldata printed by `status`, and the task is gone. Nothing has changed on chain, so this is always safe.
+- After execution, rollback is a new upgrade back to the previous implementation, subject to the full hold. It is safe when the new version only appended storage (which is all the layout gate allows), because the previous code simply ignores the new fields. It is not safe if the new version ran a reinitializer or migration that reinterpreted existing storage; that case needs its own design before it is attempted. Keep the previous implementation address in the tracking issue so the rollback proposal can be built from it.
 
 ## Related
 
