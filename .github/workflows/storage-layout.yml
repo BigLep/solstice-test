@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: ["main"]
 
+# Every SRA/SWA state struct lives behind an ERC-7201 namespace, so `forge inspect storageLayout` is empty
+# and cannot catch an upgrade-breaking change. tools/storage-layout-snapshot.sh snapshots the structs and
+# slot constants instead; on pull requests it also proves the change is upgrade-safe against the base branch
+# (only appended fields or new namespaces). See docs/UPGRADE.md.
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -14,10 +18,11 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
+          fetch-depth: 0
 
-      # Fails when a namespaced storage struct or slot constant changed without regenerating
-      # storage-layout/namespaced.txt, so that every layout change is visible in review.
-      # See docs/UPGRADE.md for what counts as an upgrade-safe change.
-      - name: Check namespaced storage snapshot
-        run: |
-          tools/storage-layout-snapshot.sh --check
+      - name: Snapshot is up to date
+        run: tools/storage-layout-snapshot.sh --check
+
+      - name: Layout is upgrade-safe against base branch
+        if: github.event_name == 'pull_request'
+        run: tools/storage-layout-snapshot.sh --compat "origin/${{ github.base_ref }}"

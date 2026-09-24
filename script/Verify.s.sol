@@ -40,7 +40,7 @@ contract VerifyScript is DeploymentScript, BytecodeCheck {
     uint256 internal constant EXPECTED_GATE_BASE = 3500 ether;
     uint256 internal constant EXPECTED_GATE_STEP_RATIO = 2.7 ether;
 
-    function run() public returns (address sra, address swa) {
+    function run() public virtual returns (address sra, address swa) {
         string memory key = _configKey();
         string memory json = vm.readFile(CONFIG_PATH);
         Config memory config = _loadConfig(json, key);

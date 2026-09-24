@@ -33,19 +33,14 @@ The SWA implementation binds to the existing SRA proxy recorded in `deployments.
 forge script script/DeployImplementation.s.sol --broadcast --verify --rpc-url $ETH_RPC_URL --skip-simulation
 ```
 
-### Verify a deployment
-`script/Verify.s.sol` (`VerifyScript`) is read-only. It rebuilds both implementations and proxies from the checked-out source and `deployments.json`, compares runtime code against the live contracts, and checks the ERC-1967 slot, initialization, owners and initializer effects.
-```sh
-forge script script/Verify.s.sol --rpc-url $ETH_RPC_URL
-```
+### Verify, rehearse, upgrade
+* `script/Verify.s.sol`: read-only check that the live proxies and implementations match the checked-out source and `deployments.json`.
+* `script/Rehearse.s.sol`: full upgrade dry run in a local fork (impersonated owners, hold, execute, verify).
+* `script/Upgrade.s.sol`: verifies a new implementation against a local build and prints the `upgradeToAndCall` calldata and task id.
+* `tools/upgrade.sh`: wraps the above to propose the upgrade to both owner Safes, track the hold and execute.
+* `tools/storage-layout-snapshot.sh`: CI gate for ERC-7201 namespaced storage; fails non-append-only changes.
 
-### Stage an upgrade
-`script/Upgrade.s.sol` (`UpgradeScript`) deploys one new implementation (or takes `NEW_IMPLEMENTATION`), checks its runtime code against a local build, and prints the exact `upgradeToAndCall` calldata, task id and veto calldata for both owners.
-```sh
-TARGET=sra forge script script/Upgrade.s.sol --broadcast --rpc-url $ETH_RPC_URL
-```
-
-Operator runbooks: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the one-time proxy deployment and [docs/UPGRADE.md](docs/UPGRADE.md) for the two-owner upgrade flow.
+Runbooks: [docs/UPGRADE.md](docs/UPGRADE.md) (the main one) and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) (nv29 addresses and new networks).
 
 ## Deploy Contract workflow
 `.github/workflows/deploy-contract.yml` runs either script from GitHub Actions.
