@@ -39,7 +39,7 @@ Versions are bumped in `version.json` with notes in `CHANGELOG.md`; the `Release
 * `script/Rehearse.s.sol`: full upgrade dry run in a local fork (impersonated owners, hold, execute, verify).
 * `script/Upgrade.s.sol`: verifies a new implementation against a local build and prints the `upgradeToAndCall` calldata and task id.
 * `tools/upgrade.sh`: proposes to both owner Safes via the Safe Transaction Service, reports task status, executes.
-* `tools/storage-layout-snapshot.sh`: CI gate for ERC-7201 namespaced storage; fails non-append-only changes.
+* `tools/storage_layout.py` with `test/layout/StorageLayoutProbe.sol` and `test/StorageSlots.t.sol`: CI gate for ERC-7201 namespaced storage; fails non-append-only changes and pins slot constants.
 
 ## Deploy Contract workflow
 `.github/workflows/deploy-contract.yml` runs either script from GitHub Actions.

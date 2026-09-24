@@ -35,5 +35,6 @@ Target: `<sra|swa|both>`  Tag: `vX.Y.Z`  Previous implementation(s), for rollbac
 - [ ] Mainnet: hold elapsed and executed
   - run:
   - execute tx:
-- [ ] Mainnet: verified (the run promotes the pre-release to the release)
+- [ ] Mainnet: verified (the run promotes the pre-release to the final release)
   - run:
+  - final release:

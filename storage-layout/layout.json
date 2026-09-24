@@ -1,0 +1,313 @@
+[
+  {
+    "name": "owners",
+    "slot": 0,
+    "offset": 0,
+    "type": "struct OwnersLibrary.Owners",
+    "bytes": 64,
+    "members": [
+      {
+        "name": "ownerInfo",
+        "slot": 0,
+        "offset": 0,
+        "type": "mapping(address => struct OwnersLibrary.OwnerInfo)",
+        "bytes": 32,
+        "value": {
+          "type": "struct OwnersLibrary.OwnerInfo",
+          "bytes": 32,
+          "members": [
+            {
+              "name": "bitId",
+              "slot": 0,
+              "offset": 0,
+              "type": "uint8",
+              "bytes": 1
+            }
+          ]
+        }
+      },
+      {
+        "name": "nextBitCursor",
+        "slot": 1,
+        "offset": 0,
+        "type": "uint8",
+        "bytes": 1
+      },
+      {
+        "name": "allOwners",
+        "slot": 1,
+        "offset": 1,
+        "type": "OwnerSet",
+        "bytes": 20
+      }
+    ]
+  },
+  {
+    "name": "pendingTasks",
+    "slot": 2,
+    "offset": 0,
+    "type": "struct PendingTaskLibrary.PendingTasks",
+    "bytes": 32,
+    "members": [
+      {
+        "name": "tasks",
+        "slot": 0,
+        "offset": 0,
+        "type": "mapping(bytes32 => struct PendingTaskInfo)",
+        "bytes": 32,
+        "value": {
+          "type": "struct PendingTaskInfo",
+          "bytes": 32,
+          "members": [
+            {
+              "name": "task",
+              "slot": 0,
+              "offset": 0,
+              "type": "struct PendingTask",
+              "bytes": 32,
+              "members": [
+                {
+                  "name": "modified",
+                  "slot": 0,
+                  "offset": 0,
+                  "type": "Epoch",
+                  "bytes": 8
+                },
+                {
+                  "name": "approvals",
+                  "slot": 0,
+                  "offset": 8,
+                  "type": "OwnerSet",
+                  "bytes": 20
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "name": "gateParams",
+    "slot": 3,
+    "offset": 0,
+    "type": "struct GateParamsLibrary.GateParamsInfo",
+    "bytes": 128,
+    "members": [
+      {
+        "name": "lastCheckedQuarter",
+        "slot": 0,
+        "offset": 0,
+        "type": "uint64",
+        "bytes": 8
+      },
+      {
+        "name": "params",
+        "slot": 1,
+        "offset": 0,
+        "type": "struct GateParams",
+        "bytes": 96,
+        "members": [
+          {
+            "name": "target",
+            "slot": 0,
+            "offset": 0,
+            "type": "struct VolumeTarget",
+            "bytes": 64,
+            "members": [
+              {
+                "name": "base",
+                "slot": 0,
+                "offset": 0,
+                "type": "FixedU18",
+                "bytes": 32
+              },
+              {
+                "name": "stepRatio",
+                "slot": 1,
+                "offset": 0,
+                "type": "FixedU18",
+                "bytes": 32
+              }
+            ]
+          },
+          {
+            "name": "steps",
+            "slot": 2,
+            "offset": 0,
+            "type": "uint64",
+            "bytes": 8
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "gateCheck",
+    "slot": 7,
+    "offset": 0,
+    "type": "struct GateParamsLibrary.GateCheckBlockers",
+    "bytes": 64,
+    "members": [
+      {
+        "name": "pendingGateParamsTaskId",
+        "slot": 0,
+        "offset": 0,
+        "type": "bytes32",
+        "bytes": 32
+      },
+      {
+        "name": "pendingWeightUntil",
+        "slot": 1,
+        "offset": 0,
+        "type": "Epoch",
+        "bytes": 8
+      }
+    ]
+  },
+  {
+    "name": "sraRegistry",
+    "slot": 9,
+    "offset": 0,
+    "type": "struct SraStorage.SraStorageRegistry",
+    "bytes": 160,
+    "members": [
+      {
+        "name": "orchestrators",
+        "slot": 0,
+        "offset": 0,
+        "type": "mapping(uint64 => struct SraStorage.OrchestratorInfo)",
+        "bytes": 32,
+        "value": {
+          "type": "struct SraStorage.OrchestratorInfo",
+          "bytes": 160,
+          "members": [
+            {
+              "name": "orchestrator",
+              "slot": 0,
+              "offset": 0,
+              "type": "address",
+              "bytes": 20
+            },
+            {
+              "name": "wallet",
+              "slot": 1,
+              "offset": 0,
+              "type": "address",
+              "bytes": 20
+            },
+            {
+              "name": "admitted",
+              "slot": 1,
+              "offset": 20,
+              "type": "bool",
+              "bytes": 1
+            },
+            {
+              "name": "mirrorA",
+              "slot": 2,
+              "offset": 0,
+              "type": "FixedU18",
+              "bytes": 32
+            },
+            {
+              "name": "mirrorB",
+              "slot": 3,
+              "offset": 0,
+              "type": "FixedU18",
+              "bytes": 32
+            },
+            {
+              "name": "admittedIndex",
+              "slot": 4,
+              "offset": 0,
+              "type": "uint64",
+              "bytes": 8
+            }
+          ]
+        }
+      },
+      {
+        "name": "activeIdOf",
+        "slot": 1,
+        "offset": 0,
+        "type": "mapping(address => uint64)",
+        "bytes": 32,
+        "value": {
+          "type": "uint64",
+          "bytes": 8
+        }
+      },
+      {
+        "name": "bindings",
+        "slot": 2,
+        "offset": 0,
+        "type": "mapping(bytes32 => uint64)",
+        "bytes": 32,
+        "value": {
+          "type": "uint64",
+          "bytes": 8
+        }
+      },
+      {
+        "name": "allocatedIds",
+        "slot": 3,
+        "offset": 0,
+        "type": "uint64",
+        "bytes": 8
+      },
+      {
+        "name": "admittedIds",
+        "slot": 4,
+        "offset": 0,
+        "type": "uint64[]",
+        "bytes": 32,
+        "base": {
+          "type": "uint64",
+          "bytes": 8
+        }
+      }
+    ]
+  },
+  {
+    "name": "sraQuarter",
+    "slot": 14,
+    "offset": 0,
+    "type": "struct SraStorage.SraStorageQuarter",
+    "bytes": 64,
+    "members": [
+      {
+        "name": "lastSubmittedQuarter",
+        "slot": 0,
+        "offset": 0,
+        "type": "uint64",
+        "bytes": 8
+      },
+      {
+        "name": "mirrorAQuarter",
+        "slot": 0,
+        "offset": 8,
+        "type": "uint64",
+        "bytes": 8
+      },
+      {
+        "name": "mirrorBQuarter",
+        "slot": 0,
+        "offset": 16,
+        "type": "uint64",
+        "bytes": 8
+      },
+      {
+        "name": "totalUsd",
+        "slot": 1,
+        "offset": 0,
+        "type": "mapping(uint64 => FixedU18)",
+        "bytes": 32,
+        "value": {
+          "type": "FixedU18",
+          "bytes": 32
+        }
+      }
+    ]
+  }
+]
