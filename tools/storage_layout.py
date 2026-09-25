@@ -38,7 +38,14 @@ def compiler_layout():
 
 
 def normalize(layout):
-    """Strip compiler noise (astId, contract) and resolve type ids to labels, keeping struct members."""
+    """Reduce the compiler's storageLayout to what an upgrade can break.
+
+    The raw `.storageLayout` output is not kept verbatim because it carries values that change with every
+    unrelated edit (`astId`, the `contract` path, type ids such as `t_struct(Owners)873_storage`), which would
+    make the committed snapshot churn and bury real layout changes in noise. This keeps each variable and struct
+    member's name, slot, offset, resolved type label and byte size, with struct members inlined, so a diff of the
+    file reads as a diff of the layout. The raw output remains one `forge inspect` away for other tooling.
+    """
     types = layout["types"]
 
     def describe(type_id):

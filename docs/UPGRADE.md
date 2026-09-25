@@ -68,6 +68,7 @@ Repeat steps 3 to 7 on mainnet.
 
 - Before execution, rollback is a veto: either owner sends the veto calldata printed by `status`, and the task is gone. Nothing has changed on chain, so this is always safe.
 - After execution, rollback is a new upgrade back to the previous implementation, subject to the full hold. It is safe when the new version only appended storage (which is all the layout gate allows), because the previous code simply ignores the new fields. It is not safe if the new version ran a reinitializer or migration that reinterpreted existing storage; that case needs its own design before it is attempted. Keep the previous implementation address in the tracking issue so the rollback proposal can be built from it.
+- Optional, to avoid a second hold: right after proposing the upgrade, also propose the rollback (an upgrade to the current implementation) and have both owners approve it. Its hold runs alongside the upgrade's, so once the upgrade has executed the rollback is executable by anyone without waiting; if everything checks out, an owner vetoes the rollback as the last step. The cost is that window: between the upgrade executing and the veto landing, anyone can trigger the rollback, so keep it short and do the veto immediately after step 7 passes.
 
 ## Related
 

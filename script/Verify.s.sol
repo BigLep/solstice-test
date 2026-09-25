@@ -138,7 +138,7 @@ contract VerifyScript is UpgradeBase {
         require(_ownerBit(proxy, owner2) != 0, string.concat(label, ": owner2 not an owner"));
         uint256 word1 = uint256(vm.load(proxy, bytes32(uint256(OWNERS_SLOT) + 1)));
         uint160 allOwners = uint160(word1 >> 8);
-        require(_popcount(allOwners) == 2, string.concat(label, ": owner set is not exactly two owners"));
+        require(_popCount(allOwners) == 2, string.concat(label, ": owner set is not exactly two owners"));
         console.log(string.concat("[", label, "] owners match config"));
     }
 
@@ -147,7 +147,7 @@ contract VerifyScript is UpgradeBase {
         return uint8(uint256(vm.load(proxy, slot)));
     }
 
-    function _popcount(uint160 x) internal pure returns (uint256 n) {
+    function _popCount(uint160 x) internal pure returns (uint256 n) {
         while (x != 0) {
             x &= x - 1;
             n++;
