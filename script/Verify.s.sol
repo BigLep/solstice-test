@@ -131,7 +131,9 @@ contract VerifyScript is UpgradeBase {
     }
 
     /// @dev Owners struct: word 0 is the ownerInfo mapping base, word 1 packs nextBitCursor (uint8, byte 0)
-    ///      and allOwners (uint160, bytes 1..20).
+    ///      and allOwners (uint160, bytes 1..20). Compares against the owners in deployments.json, so an owner
+    ///      replacement (`replaceOwner`) must update that file; the rebuilt-code check then passes again only once
+    ///      an implementation built from the updated config is live.
     function _checkOwners(string memory label, address proxy, address owner1, address owner2) internal view {
         require(owner1 != owner2, string.concat(label, ": owner1 == owner2"));
         require(_ownerBit(proxy, owner1) != 0, string.concat(label, ": owner1 not an owner"));
