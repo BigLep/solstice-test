@@ -1,8 +1,9 @@
 name: Releaser
 
-# When version.json changes on main, tag that commit with the version and create a GitHub pre-release whose notes
-# are the matching section of CHANGELOG.md. The Upgrade workflow's `verify` action later appends the live
-# implementation addresses and, on mainnet, promotes the pre-release to a release. See docs/UPGRADE.md.
+# When /version.json changes on main, tag that commit with the version and create a GitHub pre-release whose
+# notes are the matching section of /CHANGELOG.md. The `verify` operation of /.github/workflows/upgrade.yml later
+# appends the live implementation addresses and, on mainnet, promotes the pre-release to the final release.
+# Runbook: /docs/UPGRADE.md.
 on:
   push:
     branches: ["main"]
