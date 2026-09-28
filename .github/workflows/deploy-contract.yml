@@ -1,0 +1,166 @@
+name: Deploy Contract
+
+on:
+  workflow_dispatch:
+    inputs:
+      network:
+        description: Target network
+        required: true
+        type: choice
+        options:
+          - Calibnet
+          - Mainnet
+      target:
+        description: Deployment target
+        required: true
+        type: choice
+        options:
+          - Implementations only
+          - Full deployment (implementations and proxies)
+      dry_run:
+        description: Dry run (simulate only, no transactions)
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-contract-${{ inputs.network }}
+  cancel-in-progress: false
+
+# Live runs use the `calibnet` or `mainnet` environment, which must define the secret
+#   DEPLOYER_PRIVATE_KEY - raw private key of the deployer wallet for that network
+# Add required reviewers to the `mainnet` environment to gate mainnet deployments.
+# Dry runs use no environment and no secrets.
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ !inputs.dry_run && (inputs.network == 'Mainnet' && 'mainnet' || 'calibnet') || '' }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.7.1
+          cache: true
+
+      - name: Install Dependencies
+        run: |
+          forge install
+
+      - name: Select network and script
+        env:
+          NETWORK: ${{ inputs.network }}
+          TARGET: ${{ inputs.target }}
+        run: |
+          case "$NETWORK" in
+            Calibnet)
+              echo "CHAIN_ID=314159" >> "$GITHUB_ENV"
+              echo "ETH_RPC_URL=https://api.calibration.node.glif.io/rpc/v1" >> "$GITHUB_ENV"
+              ;;
+            Mainnet)
+              echo "CHAIN_ID=314" >> "$GITHUB_ENV"
+              echo "ETH_RPC_URL=https://api.node.glif.io/rpc/v1" >> "$GITHUB_ENV"
+              ;;
+          esac
+          case "$TARGET" in
+            "Implementations only") echo "DEPLOY_SCRIPT=script/DeployImplementation.s.sol" >> "$GITHUB_ENV" ;;
+            "Full deployment"*) echo "DEPLOY_SCRIPT=script/DeployAll.s.sol" >> "$GITHUB_ENV" ;;
+          esac
+
+      - name: Check RPC chain ID
+        run: |
+          actual=$(cast chain-id --rpc-url "$ETH_RPC_URL")
+          if [ "$actual" != "$CHAIN_ID" ]; then
+            echo "RPC chain ID mismatch: expected $CHAIN_ID, got $actual"
+            exit 1
+          fi
+
+      - name: Create temporary keystore
+        if: ${{ !inputs.dry_run }}
+        env:
+          DEPLOYER_PRIVATE_KEY: ${{ secrets.DEPLOYER_PRIVATE_KEY }}
+        run: |
+          umask 077
+          mkdir "$RUNNER_TEMP/keystore"
+          cast wallet import deployer \
+            --private-key "$DEPLOYER_PRIVATE_KEY" \
+            --keystore-dir "$RUNNER_TEMP/keystore" \
+            --unsafe-password ""
+          echo "ETH_KEYSTORE=$RUNNER_TEMP/keystore/deployer" >> "$GITHUB_ENV"
+
+      - name: Simulate
+        if: ${{ inputs.dry_run }}
+        run: |
+          set -o pipefail
+          forge script "$DEPLOY_SCRIPT" --rpc-url "$ETH_RPC_URL" 2>&1 | tee "$RUNNER_TEMP/deploy-output.txt"
+
+      - name: Deploy
+        if: ${{ !inputs.dry_run }}
+        run: |
+          set -o pipefail
+          # --skip-simulation: forge's anvil-backed re-simulation is unreliable on FEVM.
+          # Skipping falls back to sequential broadcast using `eth_estimateGas`.
+          forge script "$DEPLOY_SCRIPT" --rpc-url "$ETH_RPC_URL" --broadcast --verify --skip-simulation --password "" 2>&1 \
+            | tee "$RUNNER_TEMP/deploy-output.txt"
+
+      - name: Clean up keystore
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/keystore"
+
+      - name: Upload broadcast records
+        if: ${{ always() && !inputs.dry_run }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: broadcast-${{ inputs.network }}-${{ github.run_id }}
+          path: broadcast/
+          if-no-files-found: ignore
+
+      - name: Job summary
+        if: always()
+        env:
+          NETWORK: ${{ inputs.network }}
+          TARGET: ${{ inputs.target }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          {
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "## Dry run: $TARGET on $NETWORK"
+            else
+              echo "## Deployment: $TARGET on $NETWORK"
+            fi
+            echo
+            echo "| Parameter | Value |"
+            echo "|-----------|-------|"
+            echo "| **Network** | $NETWORK ($CHAIN_ID) |"
+            echo "| **Target** | $TARGET |"
+            echo "| **Commit** | \`${GITHUB_SHA::8}\` |"
+            echo "| **Actor** | @$ACTOR |"
+            echo "| **Dry run** | $DRY_RUN |"
+
+            if [ "$DRY_RUN" = "false" ]; then
+              echo
+              echo "### Deployed contracts"
+              echo
+              echo '```'
+              sed -n '/== Return ==/,/^$/p' "$RUNNER_TEMP/deploy-output.txt"
+              echo '```'
+              diff=$(git diff deployments.json || true)
+              if [ -n "$diff" ]; then
+                echo
+                echo "### deployments.json changes (ephemeral; commit them yourself)"
+                echo
+                echo '```diff'
+                echo "$diff"
+                echo '```'
+              fi
+              echo
+              echo "> Do not rerun a deployment after a partial failure. Inspect the deployer nonce and chain history first."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

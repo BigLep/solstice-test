@@ -3,7 +3,6 @@ pragma solidity ^0.8.36;
 
 import {Script} from "forge-std/Script.sol";
 import {stdJson} from "forge-std/StdJson.sol";
-import {VmSafe} from "forge-std/Vm.sol";
 
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
@@ -12,7 +11,8 @@ import {StreamWeightActor} from "../src/StreamWeightActor.sol";
 import {Epoch} from "../src/lib/Epoch.sol";
 import {UnanimousProxied} from "../src/lib/UnanimousProxied.sol";
 
-contract DeployScript is Script {
+/// @dev Config loading and deployment helpers shared by every deploy script.
+contract DeploymentScript is Script {
     using stdJson for string;
 
     string internal constant CONFIG_PATH = "deployments.json";
@@ -32,15 +32,15 @@ contract DeployScript is Script {
         Epoch hold;
     }
 
-    function initializeProxy(address implementation) internal returns (address proxy) {
-        proxy = address(new ERC1967Proxy(implementation, abi.encodeCall(UnanimousProxied.initialize, ())));
+    error BadEpoch(uint256 epoch);
+
+    function _configKey() internal view returns (string memory) {
+        return string.concat(".", vm.toString(block.chainid));
     }
 
     function _readAddress(string memory json, string memory key, string memory field) internal pure returns (address) {
         return json.readAddress(string.concat(key, ".", field));
     }
-
-    error BadEpoch(uint256 epoch);
 
     function _readEpoch(string memory json, string memory key, string memory field) internal pure returns (Epoch) {
         uint256 value = json.readUint(string.concat(key, ".", field));
@@ -64,18 +64,9 @@ contract DeployScript is Script {
         });
     }
 
-    function _writeDeployedAddresses(string memory key, address sra, address swa) internal {
-        vm.writeJson(vm.toString(sra), CONFIG_PATH, string.concat(key, ".sra"));
-        vm.writeJson(vm.toString(swa), CONFIG_PATH, string.concat(key, ".swa"));
-    }
-
-    function run() public returns (address sra, address swa) {
-        string memory key = string.concat(".", vm.toString(block.chainid));
-        Config memory config = _loadConfig(vm.readFile(CONFIG_PATH), key);
-
-        vm.startBroadcast();
-
-        address sraImplementation = address(
+    /// @dev Must be called between vm.startBroadcast and vm.stopBroadcast.
+    function _deploySraImplementation(Config memory config) internal returns (address) {
+        return address(
             new ServiceRewardsActor(
                 config.sraOwner1,
                 config.sraOwner2,
@@ -88,16 +79,14 @@ contract DeployScript is Script {
                 config.hold
             )
         );
-        sra = initializeProxy(sraImplementation);
+    }
 
-        address swaImplementation =
-            address(new StreamWeightActor(config.swaOwner1, config.swaOwner2, config.hold, ServiceRewardsActor(sra)));
-        swa = initializeProxy(swaImplementation);
+    /// @dev Must be called between vm.startBroadcast and vm.stopBroadcast.
+    function _deploySwaImplementation(Config memory config, address sra) internal returns (address) {
+        return address(new StreamWeightActor(config.swaOwner1, config.swaOwner2, config.hold, ServiceRewardsActor(sra)));
+    }
 
-        vm.stopBroadcast();
-
-        if (vm.isContext(VmSafe.ForgeContext.ScriptBroadcast)) {
-            _writeDeployedAddresses(key, sra, swa);
-        }
+    function initializeProxy(address implementation) internal returns (address proxy) {
+        proxy = address(new ERC1967Proxy(implementation, abi.encodeCall(UnanimousProxied.initialize, ())));
     }
 }

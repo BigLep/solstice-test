@@ -23,6 +23,10 @@ jobs:
         run: |
           forge install
 
-      - name: Dry run on calibnet
+      - name: Dry-run initial deployment
         run: |
-          forge script script/Deploy.s.sol --chain-id 314159
+          forge script script/DeployAll.s.sol --chain-id 314159
+
+      - name: Dry-run implementation redeploy against recorded proxies
+        run: |
+          forge script script/DeployImplementation.s.sol --chain-id 314159
