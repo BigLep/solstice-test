@@ -303,6 +303,13 @@
         "bytes": 8
       },
       {
+        "name": "f13Packed",
+        "slot": 0,
+        "offset": 24,
+        "type": "uint64",
+        "bytes": 8
+      },
+      {
         "name": "totalUsd",
         "slot": 1,
         "offset": 0,

@@ -28,6 +28,7 @@ library SraStorage {
         uint64 lastSubmittedQuarter; // 0 = no real quarter submitted; quarter 0 is reserved
         uint64 mirrorAQuarter; // slot A's quarter tag: quarter q stored as q + 1; 0 = never written
         uint64 mirrorBQuarter; // slot B's quarter tag: quarter q stored as q + 1; 0 = never written
+        uint64 f13Packed; // F13(b) test: fits in the 8 free bytes of slot 0
         mapping(uint64 quarter => FixedU18) totalUsd;
     }
 
