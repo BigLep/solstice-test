@@ -7,29 +7,22 @@
 # versions actually installed are pinned by tools/upgrade.py.lock (run with `uv run --locked`).
 """Every step of an SRA/SWA implementation upgrade, as one command each. See docs/UPGRADE.md.
 
-  uv run tools/upgrade.py rehearse [--sra 0x.. --swa 0x..]          dry-run both upgrades in a local fork
-  uv run tools/upgrade.py propose --sra 0x.. --swa 0x..              verify both implementations, queue the upgrade
-                                                                     on every owner Safe (DRY_RUN=1 to stop short)
-  uv run tools/upgrade.py status --sra 0x.. --swa 0x.. [--previous-sra 0x.. --previous-swa 0x..]
-                                                                     approvals, hold end, prepared-rollback state
-  uv run tools/upgrade.py execute --sra 0x.. --swa 0x..              send both upgrades once the holds have elapsed
-  uv run tools/upgrade.py verify [--record-release]                  script/Verify.s.sol against the live chain;
-                                                                     optionally append the result to the GitHub release
+Both contracts are always upgraded together, so every operation acts on both.
 
 Environment:
-  ETH_RPC_URL               required; selects the network (chain id 314 or 314159)
-  PROPOSER_PRIVATE_KEY      the operations key for propose (an owner of each Safe registers its address as a
-                            proposer once, in the Safe app: https://help.safe.global/articles/1671337645-proposers);
-                            any funded key for execute
-  UPGRADE_CALLDATA          optional `data` for upgradeToAndCall (a reinitializer call); default empty
-  DRY_RUN=1                 for propose: print the Safe transactions instead of submitting them
-  NETWORK_NAME              for --record-release: the label to write into the release ("Calibnet" or "Mainnet")
+  ETH_RPC_URL           required; selects the network (chain id 314 or 314159)
+  DEPLOYER_PRIVATE_KEY  the operations key: registered once by an owner of each Safe as a proposer
+                        (https://help.safe.global/articles/1671337645-proposers) for `propose`; any funded key
+                        for `execute`
+  DRY_RUN=1             for propose: build and sign the Safe transactions but do not post them
+  NETWORK_NAME          for `verify --record-release`: the label written into the release ("Calibnet" or "Mainnet")
 
 `propose` first runs script/Upgrade.s.sol for each contract, which rebuilds the implementation from the checked-out
-source and deployments.json and refuses to continue unless the on-chain runtime code matches, so the calldata
-always refers to code built from this commit. It then builds the same Safe transaction for each owner Safe, signs
-it with the proposer key and posts it to the Filecoin Safe Transaction Service. The proposer then tells the owner
-groups; each confirms and executes in the Safe app. The hold starts when the second owner's transaction lands.
+source and deployments.json and refuses to continue unless the on-chain runtime code matches, so the queued
+transaction always refers to code built from this commit. It then posts the same transaction to each owner Safe
+through the Filecoin Safe Transaction Service, skipping Safes where it is already queued. The proposer then tells
+the owner groups; each confirms and executes in the Safe app. The hold starts when the second owner's transaction
+lands.
 """
 
 import argparse
@@ -61,7 +54,6 @@ SAFE_SERVICES = {
     314: "https://transaction.safe.filecoin.io",
     314159: "https://transaction-testnet.safe.filecoin.io",
 }
-ZERO_ADDRESS = "0x" + "00" * 20
 
 
 def die(msg):
@@ -69,17 +61,8 @@ def die(msg):
     sys.exit(1)
 
 
-def parse_hex(value, name):
-    """Hex bytes with or without a 0x prefix; anything else is an error rather than silently truncated."""
-    raw = value[2:] if value.lower().startswith("0x") else value
-    try:
-        return bytes.fromhex(raw)
-    except ValueError:
-        die(f"{name} must be hex (got {value!r})")
-
-
 def forge_script(script, env=None, quiet=False):
-    """Run a forge script against ETH_RPC_URL (no broadcast); return stdout, exit on failure."""
+    """Run a forge script against ETH_RPC_URL (no broadcast); print its log lines; exit on failure."""
     r = subprocess.run(
         ["forge", "script", script, "--rpc-url", os.environ["ETH_RPC_URL"]],
         cwd=ROOT, env={**os.environ, **(env or {})}, capture_output=True, text=True,
@@ -89,10 +72,29 @@ def forge_script(script, env=None, quiet=False):
         print("\n".join(tail), file=sys.stderr)
         die(f"{script} failed")
     if not quiet:
-        for line in r.stdout.splitlines():
-            if line.startswith("  ") and not line.startswith("  ["):
-                print(line.strip())
+        for line in script_logs(r.stdout):
+            print(line)
     return r.stdout
+
+
+def script_logs(stdout):
+    """The console.log lines of a forge script run: everything between forge's `== Logs ==` marker and the next
+    section header, stripped of indentation."""
+    lines, on = [], False
+    for line in stdout.splitlines():
+        if line.strip() == "== Logs ==":
+            on = True
+            continue
+        if on and (line.startswith("##") or line.startswith("== ") or line.startswith("Script ran")):
+            break
+        if on and line.strip():
+            lines.append(line.strip())
+    return lines
+
+
+def key_account(purpose):
+    key = os.environ.get("DEPLOYER_PRIVATE_KEY") or die(f"DEPLOYER_PRIVATE_KEY is required for {purpose}")
+    return key, Account.from_key(key)
 
 
 class Chain:
@@ -111,43 +113,40 @@ class Chain:
         return [to_checksum_address(self.cfg[f"{target}Owner1"]), to_checksum_address(self.cfg[f"{target}Owner2"])]
 
     def current_impl(self, target):
-        word = self.w3.eth.get_storage_at(self.proxy(target), IMPLEMENTATION_SLOT)
-        return to_checksum_address(word[-20:])
+        return to_checksum_address(self.w3.eth.get_storage_at(self.proxy(target), IMPLEMENTATION_SLOT)[-20:])
 
 
 class Task:
-    """One upgradeToAndCall task on one proxy: its calldata, id, and on-chain approval state."""
+    """One `upgradeToAndCall(impl, "")` task on one proxy: its calldata, id, and on-chain state."""
 
     def __init__(self, chain, target, implementation):
         self.chain, self.target = chain, target
+        self.name = target.upper()
         self.proxy = chain.proxy(target)
         self.impl = to_checksum_address(implementation)
-        data = parse_hex(os.environ.get("UPGRADE_CALLDATA", "0x"), "UPGRADE_CALLDATA")
-        self.calldata = UPGRADE_SELECTOR + encode(["address", "bytes"], [self.impl, data])
+        self.calldata = upgrade_calldata(self.impl)
         self.task_id = keccak(self.calldata)
         self.slot = keccak(encode(["bytes32", "bytes32"], [self.task_id, PENDING_TASKS_SLOT]))
 
     def state(self):
+        """(last modified epoch, number of approvals); (0, 0) when no task is pending."""
         word = int.from_bytes(self.chain.w3.eth.get_storage_at(self.proxy, self.slot), "big")
-        modified = word & ((1 << 64) - 1)
-        approvals = bin((word >> 64) & ((1 << 160) - 1)).count("1")
-        return modified, approvals
+        return word & ((1 << 64) - 1), bin((word >> 64) & ((1 << 160) - 1)).count("1")
 
-    def verify_code(self):
-        print(f"== {self.target.upper()}: verifying {self.impl} against a local build (script/Upgrade.s.sol) ==")
-        out = forge_script("script/Upgrade.s.sol", {"TARGET": self.target, "NEW_IMPLEMENTATION": self.impl}, quiet=True)
-        lines = out.splitlines()
-        marker = [i for i, l in enumerate(lines) if "send this exact calldata" in l]
-        if not marker or lines[marker[0] + 1].strip() != "0x" + self.calldata.hex():
-            die("calldata mismatch between script/Upgrade.s.sol and this tool")
-        print("implementation runtime code matches the local build")
+    def executable(self, block):
+        modified, approvals = self.state()
+        return modified != 0 and approvals >= 2 and block >= modified + self.chain.hold
+
+    def check_code(self):
+        print(f"== {self.name}: checking {self.impl} against a local build (script/Upgrade.s.sol) ==")
+        forge_script("script/Upgrade.s.sol", {"TARGET": self.target, "NEW_IMPLEMENTATION": self.impl})
 
     def summary(self):
         print()
-        print(f"== {self.target.upper()} upgrade on chain {self.chain.chain_id} ==")
+        print(f"== {self.name} upgrade on chain {self.chain.chain_id} ==")
         print(f"proxy                   {self.proxy}")
         print(f"current implementation  {self.chain.current_impl(self.target)}")
-        print(f"new implementation      {self.impl}")
+        print(f"implementation          {self.impl}")
         print(f"owner Safes             {'  '.join(self.chain.owners(self.target))}")
         print(f"hold (epochs)           {self.chain.hold}")
         print(f"task id                 0x{self.task_id.hex()}")
@@ -156,21 +155,43 @@ class Task:
         print("veto calldata (either owner, to proxy):")
         print("0x" + (VETO_SELECTOR + self.task_id).hex())
 
-    def status(self, label="upgrade"):
+    def status(self):
         modified, approvals = self.state()
         block = self.chain.w3.eth.block_number
-        print(f"[{self.target.upper()} {label} task 0x{self.task_id.hex()[:10]}...] ", end="")
-        if label == "upgrade" and self.chain.current_impl(self.target) == self.impl:
-            print("executed: implementation slot points at the new implementation")
-        elif modified == 0:
-            print("no pending task (not submitted, or already executed or vetoed)")
-        else:
+        print(f"[{self.name} task 0x{self.task_id.hex()[:10]}... -> {self.impl}] ", end="")
+        if modified != 0:
             end = modified + self.chain.hold
             left = end - block
             if approvals >= 2:
-                print(f"approved by both owners at epoch {modified}; " + (f"hold ends at epoch {end} ({left} epochs, about {left * 30 // 3600}h)" if left > 0 else "executable now by anyone"))
+                print(f"approved by both owners at epoch {modified}; "
+                      + (f"hold ends at epoch {end} ({left} epochs, about {left * 30 // 3600}h)" if left > 0 else "executable now by anyone"))
             else:
                 print(f"{approvals} approval(s), last at epoch {modified}; the hold starts on the second approval")
+        elif self.chain.current_impl(self.target) == self.impl:
+            print("live: the proxy points at this implementation")
+        else:
+            print("no pending task (not submitted, or already executed or vetoed)")
+
+
+def next_nonce(on_chain, queued):
+    """Next free Safe nonce: after every queued transaction, but never below the on-chain nonce, since the
+    service may still list stale proposals whose nonce has already been consumed."""
+    return max([on_chain] + [n + 1 for n in queued if n >= on_chain])
+
+
+def already_queued(queued, on_chain, to, data):
+    """The queued (unexecuted) Safe transaction that already carries this call, if any. Proposals whose nonce is
+    below the on-chain nonce can never execute, so they do not count."""
+    for t in queued:
+        if (int(t["nonce"]) >= on_chain and (t.get("to") or "").lower() == to.lower()
+                and (t.get("data") or "").lower() == "0x" + data.hex()):
+            return t
+    return None
+
+
+def upgrade_calldata(implementation):
+    """`upgradeToAndCall(implementation, "")`, byte-identical for every sender; its keccak is the task id."""
+    return UPGRADE_SELECTOR + encode(["address", "bytes"], [to_checksum_address(implementation), b""])
 
 
 def tasks(chain, args):
@@ -178,31 +199,30 @@ def tasks(chain, args):
 
 
 def cmd_rehearse(args):
-    for t in TARGETS:
-        impl = getattr(args, t)
-        print(f"== Rehearsing {t.upper()} in a local fork (script/Rehearse.s.sol) ==")
-        forge_script("script/Rehearse.s.sol", {"TARGET": t, **({"NEW_IMPLEMENTATION": impl} if impl else {})})
-        print()
+    env = {f"NEW_IMPLEMENTATION_{t.upper()}": getattr(args, t) for t in TARGETS if getattr(args, t)}
+    print("== Rehearsing the SRA and SWA upgrades in a local fork (script/Rehearse.s.sol) ==")
+    forge_script("script/Rehearse.s.sol", env)
 
 
 def cmd_propose(args):
     chain = Chain()
-    key = os.environ.get("PROPOSER_PRIVATE_KEY") or die("PROPOSER_PRIVATE_KEY is required for propose")
-    proposer = Account.from_key(key).address
+    key, account = key_account("propose")
     base_url = SAFE_SERVICES.get(chain.chain_id) or die(f"no Safe Transaction Service known for chain {chain.chain_id}")
     api = TransactionServiceApi(EthereumNetwork(chain.chain_id), ethereum_client=chain.client, base_url=base_url)
     for task in tasks(chain, args):
-        task.verify_code()
+        task.check_code()
         task.summary()
         print()
-        print(f"== Queuing the {task.target.upper()} upgrade on its owner Safes as {proposer} via {base_url} ==")
+        print(f"== Queuing the {task.name} upgrade on its owner Safes as {account.address} via {base_url} ==")
         for owner in chain.owners(task.target):
             safe = Safe(owner, chain.client)
-            # Next free nonce: after every queued (unexecuted) transaction, but never below the on-chain nonce,
-            # since the service may still list stale proposals whose nonce has already been consumed.
             on_chain = safe.retrieve_nonce()
-            pending = [int(t["nonce"]) for t in api.get_transactions(owner, executed="false", limit=100)]
-            nonce = max([on_chain] + [n + 1 for n in pending if n >= on_chain])
+            queued = api.get_transactions(owner, executed="false", limit=100)
+            same = already_queued(queued, on_chain, task.proxy, task.calldata)
+            if same:
+                print(f"Safe {owner}: already queued at nonce {same['nonce']} (safeTxHash {same['safeTxHash']}); skipping")
+                continue
+            nonce = next_nonce(on_chain, [int(t["nonce"]) for t in queued])
             safe_tx = safe.build_multisig_tx(to=task.proxy, value=0, data=task.calldata, safe_nonce=nonce)
             safe_tx.sign(key)
             print(f"Safe {owner}: nonce {nonce}, safeTxHash 0x{safe_tx.safe_tx_hash.hex()}")
@@ -212,10 +232,11 @@ def cmd_propose(args):
             try:
                 api.post_transaction(safe_tx)
             except Exception as e:  # SafeAPIException carries the service's reason
-                die(f"  proposal rejected: {e}\n  Is {proposer} registered as a proposer on {owner}? See docs/UPGRADE.md.")
+                die(f"  proposal rejected: {e}\n  Is {account.address} registered as a proposer on {owner}? See docs/UPGRADE.md.")
             print(f"  queued; the owners of {owner} confirm and execute it at https://safe.filecoin.io")
     print()
-    print("Next: tell each owner group their Safe has the upgrade queued. Owner 1's execution submits it; owner 2's approves it and starts the hold.")
+    print("Next: tell each owner group their Safe has the upgrade queued. The first owner's execution submits it; "
+          "the second's approves it and starts the hold.")
 
 
 def cmd_status(args):
@@ -223,23 +244,22 @@ def cmd_status(args):
     print(f"== Task status on chain {chain.chain_id}, epoch {chain.w3.eth.block_number} ==")
     for task in tasks(chain, args):
         task.status()
-        previous = getattr(args, f"previous_{task.target}")
-        if previous:
-            Task(chain, task.target, previous).status("prepared rollback")
-    print()
     for task in tasks(chain, args):
         task.summary()
 
 
 def cmd_execute(args):
     chain = Chain()
-    key = os.environ.get("PROPOSER_PRIVATE_KEY") or die("PROPOSER_PRIVATE_KEY is required for execute")
-    account = Account.from_key(key)
-    for task in tasks(chain, args):
+    key, account = key_account("execute")
+    todo = [t for t in tasks(chain, args) if chain.current_impl(t.target) != t.impl]
+    block = chain.w3.eth.block_number
+    for task in todo:
         task.status()
-        if chain.current_impl(task.target) == task.impl:
-            continue
-        print(f"== Executing the {task.target.upper()} upgrade from {account.address} ==")
+    not_ready = [t.name for t in todo if not t.executable(block)]
+    if not_ready:
+        die(f"not executing anything: {', '.join(not_ready)} not yet executable (both contracts must be ready)")
+    for task in todo:
+        print(f"== Executing the {task.name} upgrade from {account.address} ==")
         tx = {
             "from": account.address, "to": task.proxy, "data": task.calldata, "value": 0,
             "chainId": chain.chain_id, "nonce": chain.w3.eth.get_transaction_count(account.address),
@@ -266,15 +286,14 @@ def cmd_execute(args):
 
 def cmd_verify(args):
     print("== script/Verify.s.sol against the live chain ==")
-    out = forge_script("script/Verify.s.sol")
-    if "ALL CHECKS PASSED" not in out:
+    if "ALL CHECKS PASSED" not in forge_script("script/Verify.s.sol"):
         die("verification did not pass")
     if args.record_release:
         record_release()
 
 
-def sh(*cmd, check=True, **kw):
-    return subprocess.run(cmd, cwd=ROOT, check=check, capture_output=True, text=True, **kw).stdout.strip()
+def sh(*cmd, check=True):
+    return subprocess.run(cmd, cwd=ROOT, check=check, capture_output=True, text=True).stdout.strip()
 
 
 def record_release():
@@ -293,18 +312,20 @@ def record_release():
         print(f"no release {tag}; nothing to record")
         return
     chain = Chain()
-    epoch = chain.w3.eth.block_number
-    run_url = os.environ.get("RUN_URL", "")
-    note = (f"\n\n**Verified on {network}** at epoch {epoch} from `{head[:8]}`"
-            + (f" ([run]({run_url}))" if run_url else "")
-            + f": SRA implementation `{chain.current_impl('sra')}`, SWA implementation `{chain.current_impl('swa')}`.\n")
-    body = sh("gh", "release", "view", tag, "--json", "body", "-q", ".body") + note
+    facts = f"SRA implementation `{chain.current_impl('sra')}`, SWA implementation `{chain.current_impl('swa')}`"
+    body = sh("gh", "release", "view", tag, "--json", "body", "-q", ".body")
+    if any(line.startswith(f"**Verified on {network}**") and facts in line for line in body.splitlines()):
+        print(f"release {tag} already records this verification on {network}; not appending again")
+    else:
+        run_url = os.environ.get("RUN_URL", "")
+        body += (f"\n\n**Verified on {network}** at epoch {chain.w3.eth.block_number} from `{head[:8]}`"
+                 + (f" ([run]({run_url}))" if run_url else "") + f": {facts}.\n")
     notes = ROOT / "release-notes.tmp.md"
     notes.write_text(body)
     try:
         if network == "Mainnet":
             sh("gh", "release", "edit", tag, "--notes-file", str(notes), "--prerelease=false", "--latest")
-            print(f"recorded and promoted {tag} to the final release")
+            print(f"recorded verification and promoted {tag} to the final release")
         else:
             sh("gh", "release", "edit", tag, "--notes-file", str(notes))
             print(f"recorded verification in pre-release {tag}")
@@ -321,27 +342,21 @@ def address(value):
 
 def main(argv):
     p = argparse.ArgumentParser(prog="tools/upgrade.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    sub = p.add_subparsers(dest="operation", required=True)
+    sub = p.add_subparsers(dest="operation", required=True, metavar="operation")
 
-    def impls(sp, required):
-        sp.add_argument("--sra", type=address, required=required, help="new SRA implementation address")
-        sp.add_argument("--swa", type=address, required=required, help="new SWA implementation address")
+    def impls(sp, required, what="new"):
+        sp.add_argument("--sra", type=address, required=required, help=f"{what} SRA implementation address")
+        sp.add_argument("--swa", type=address, required=required, help=f"{what} SWA implementation address")
 
-    impls(sub.add_parser("rehearse", help="dry-run both upgrades in a local fork"), required=False)
-    impls(sub.add_parser("propose", help="verify and queue both upgrades on the owner Safes"), required=True)
-    s = sub.add_parser("status", help="approvals, hold end and prepared-rollback state")
-    impls(s, required=True)
-    s.add_argument("--previous-sra", type=address, help="previous SRA implementation, to report its prepared rollback")
-    s.add_argument("--previous-swa", type=address, help="previous SWA implementation, to report its prepared rollback")
-    impls(sub.add_parser("execute", help="send both upgrades after the holds"), required=True)
+    impls(sub.add_parser("rehearse", help="dry-run both upgrades in a local fork; without addresses, build from source"), False)
+    impls(sub.add_parser("propose", help="check both implementations and queue the upgrades on the owner Safes"), True)
+    impls(sub.add_parser("status", help="approvals and hold end for both tasks (pass previous addresses to see a prepared rollback)"), True, what="upgrade-target")
+    impls(sub.add_parser("execute", help="send both upgrades once both holds have elapsed"), True)
     v = sub.add_parser("verify", help="run script/Verify.s.sol against the live chain")
     v.add_argument("--record-release", action="store_true", help="append the result to the GitHub release; promote on mainnet")
 
     args = p.parse_args(argv)
-    {
-        "rehearse": cmd_rehearse, "propose": cmd_propose, "status": cmd_status, "execute": cmd_execute,
-        "verify": cmd_verify,
-    }[args.operation](args)
+    {"rehearse": cmd_rehearse, "propose": cmd_propose, "status": cmd_status, "execute": cmd_execute, "verify": cmd_verify}[args.operation](args)
     return 0
 
 

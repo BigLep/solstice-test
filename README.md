@@ -35,9 +35,9 @@ forge script script/DeployImplementation.s.sol --broadcast --verify --rpc-url $E
 
 ### Upgrades
 Versions are bumped in [`version.json`](version.json) with notes in [`CHANGELOG.md`](CHANGELOG.md); the [Releaser workflow](.github/workflows/releaser.yml) tags and pre-releases them. Implementation upgrades run through the [Upgrade workflow](.github/workflows/upgrade.yml), a thin wrapper around [`tools/upgrade.py`](tools/upgrade.py): rehearse, propose to the owner Safes, track the hold, execute, verify (which records into the release). The runbook is [docs/UPGRADE.md](docs/UPGRADE.md); [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) covers new networks. Under the hood, in the order they are used:
-* [`script/Rehearse.s.sol`](script/Rehearse.s.sol): full upgrade dry run in a local fork (impersonated owners, hold, execute, verify).
-* [`script/Upgrade.s.sol`](script/Upgrade.s.sol): checks a deployed implementation against a local build and prints the `upgradeToAndCall` calldata and task id. [`script/UpgradeBase.sol`](script/UpgradeBase.sol) holds what the three scripts share.
-* [`tools/upgrade.py`](tools/upgrade.py), run with `uv run`: every upgrade operation as one command, using safe-eth-py for the Safe proposals.
+* [`tools/upgrade.py`](tools/upgrade.py), run with `uv run`: every upgrade operation as one command; drives the forge scripts below and uses safe-eth-py for the Safe proposals.
+* [`script/Rehearse.s.sol`](script/Rehearse.s.sol): full upgrade of both contracts in a local fork (impersonated owners, hold, execute, verify).
+* [`script/Upgrade.s.sol`](script/Upgrade.s.sol): checks that a deployed implementation was built from the checked-out source and can be upgraded to. [`script/UpgradeBase.sol`](script/UpgradeBase.sol) holds what the three scripts share.
 * [`script/Verify.s.sol`](script/Verify.s.sol): read-only check that the live proxies and implementations match the checked-out source and [`deployments.json`](deployments.json).
 * [`tools/storage_layout.py`](tools/storage_layout.py) with [`test/layout/StorageLayoutProbe.sol`](test/layout/StorageLayoutProbe.sol) and [`test/StorageSlots.t.sol`](test/StorageSlots.t.sol): CI gate for ERC-7201 namespaced storage; fails non-append-only changes and pins slot constants.
 

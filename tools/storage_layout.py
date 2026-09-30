@@ -6,30 +6,33 @@ The contracts keep every piece of state in ERC-7201 namespaced structs reached t
 state variable per namespace; this tool asks the compiler for that probe's layout and keeps a normalized copy
 in storage-layout/layout.json. The slot constants themselves are pinned by test/StorageSlots.t.sol.
 
-  tools/storage_layout.py                  regenerate storage-layout/layout.json
-  tools/storage_layout.py --check          fail if the committed snapshot is stale
-  tools/storage_layout.py --compat <ref>   fail if the layout is not upgrade-safe against <git-ref>
-
-Upgrade-safe means every variable and every struct member present at <ref> keeps its slot, offset and type,
-and anything new is appended (a new member after the existing ones, or a new namespace). Anything else
-would reinterpret live storage behind the proxy and needs a migration, which docs/UPGRADE.md does not cover.
+Upgrade-safe (--compat passes) means: every namespace present at <ref> is still there with the same type; every
+struct member present at <ref> is still there, in the same order, at the same slot and offset within its struct,
+with the same type; every non-struct type keeps its byte width; and anything new is appended (a new member after
+the existing ones, or a new namespace). Anything else would reinterpret live storage behind the proxy and needs
+a migration, which docs/UPGRADE.md does not cover.
 """
 
+import argparse
 import json
-import os
 import re
 import subprocess
 import sys
+from pathlib import Path
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = Path(__file__).resolve().parent.parent
 PROBE = "StorageLayoutProbe"
-OUT = os.path.join(ROOT, "storage-layout", "layout.json")
+OUT = ROOT / "storage-layout" / "layout.json"
+NAMESPACE_RE = re.compile(r"@custom:storage-location\s+erc7201:\S+[^{]*?struct\s+([A-Za-z0-9_]+)\s*\{", re.S)
 
 
 def compiler_layout():
-    result = subprocess.run(
-        ["forge", "inspect", PROBE, "storageLayout", "--json"], cwd=ROOT, capture_output=True, text=True
-    )
+    cmd = ["forge", "inspect", PROBE, "storageLayout", "--json"]
+    result = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+    if result.returncode != 0 and "storage layout missing from artifact" in result.stderr:
+        # A cached artifact built without the storage layout; a clean build fixes it.
+        subprocess.run(["forge", "clean"], cwd=ROOT, check=True, capture_output=True)
+        result = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
     if result.returncode != 0:
         print("forge inspect failed (does the project compile?):", file=sys.stderr)
         print(result.stderr.strip()[-2000:], file=sys.stderr)
@@ -45,6 +48,9 @@ def normalize(layout):
     make the committed snapshot churn and bury real layout changes in noise. This keeps each variable and struct
     member's name, slot, offset, resolved type label and byte size, with struct members inlined, so a diff of the
     file reads as a diff of the layout. The raw output remains one `forge inspect` away for other tooling.
+
+    Top-level slots are an artifact of the probe (its variables are laid out one after another); the real
+    namespaces each live at their own ERC-7201 slot. They are kept for readability but never compared.
     """
     types = layout["types"]
 
@@ -68,17 +74,11 @@ def normalize(layout):
     ]
 
 
-NAMESPACE_RE = re.compile(r"@custom:storage-location\s+erc7201:\S+[^{]*?struct\s+([A-Za-z0-9_]+)\s*\{", re.S)
-
-
 def namespaced_structs():
     """Names of every struct in src/ declared with an ERC-7201 @custom:storage-location tag."""
     names = set()
-    for dirpath, _, files in os.walk(os.path.join(ROOT, "src")):
-        for f in files:
-            if f.endswith(".sol"):
-                with open(os.path.join(dirpath, f)) as fh:
-                    names.update(NAMESPACE_RE.findall(fh.read()))
+    for path in (ROOT / "src").rglob("*.sol"):
+        names.update(NAMESPACE_RE.findall(path.read_text()))
     return names
 
 
@@ -91,46 +91,58 @@ def check_probe_covers_namespaces(layout):
         sys.exit(1)
 
 
-def entries_by_name(items):
-    return {e["name"]: e for e in items}
+def compare_entry(b, n, here, errors, position):
+    """One base entry against its counterpart: type always; slot and offset for struct members (`position`);
+    byte width for everything except structs, which may legitimately grow by appending members."""
+    keys = ["type"] + (["slot", "offset"] if position else []) + ([] if "members" in b else ["bytes"])
+    for key in keys:
+        if b.get(key) != n.get(key):
+            errors.append(f"{here}: {key} changed {b.get(key)!r} -> {n.get(key)!r}")
+    if "members" in b:
+        if "members" not in n:
+            errors.append(f"{here}: lost members")
+        else:
+            compare_members(b["members"], n["members"], here, errors)
+    for key in ("value", "base"):  # mapping value, array element: not positioned, but width still matters
+        if key in b:
+            if key not in n:
+                errors.append(f"{here}: lost {key}")
+            else:
+                compare_entry(b[key], n[key], f"{here}.{key}", errors, position=False)
 
 
-def compare(base, new, path, errors):
-    """Every base entry must exist in new at the same slot/offset/type; new entries may only be appended."""
+def compare_members(base, new, path, errors):
+    """Struct members: same names in the same order (new ones only at the end), each at its old position."""
     base_names = [e["name"] for e in base]
     new_names = [e["name"] for e in new]
     if new_names[: len(base_names)] != base_names:
-        errors.append(f"{path}: order changed or entries removed: {base_names} -> {new_names}")
+        errors.append(f"{path}: members reordered, removed or inserted: {base_names} -> {new_names}")
         return
-    new_by = entries_by_name(new)
+    new_by = {e["name"]: e for e in new}
     for b in base:
-        n = new_by[b["name"]]
-        here = f"{path}.{b['name']}"
-        for key in ("slot", "offset", "type", "bytes"):
-            if b.get(key) != n.get(key):
-                errors.append(f"{here}: {key} changed {b.get(key)!r} -> {n.get(key)!r}")
-        for key in ("members", "value", "base"):
-            if key in b:
-                if key not in n:
-                    errors.append(f"{here}: lost {key}")
-                elif key == "members":
-                    compare(b["members"], n["members"], here, errors)
-                else:
-                    compare([dict(b[key], name=key)], [dict(n[key], name=key)], here, errors)
+        compare_entry(b, new_by[b["name"]], f"{path}.{b['name']}", errors, position=True)
+
+
+def compare_layouts(base, new, errors):
+    """Top level: the set of namespaces. Order and slot carry no meaning (each namespace has its own ERC-7201
+    slot), so a namespace may be added anywhere; removing one is an error."""
+    new_by = {e["name"]: e for e in new}
+    for b in base:
+        if b["name"] not in new_by:
+            errors.append(f"layout: namespace variable {b['name']} was removed from the probe")
+            continue
+        compare_entry(b, new_by[b["name"]], f"layout.{b['name']}", errors, position=False)
 
 
 def main(argv):
-    mode = argv[1] if len(argv) > 1 else ""
-    if mode == "":
-        os.makedirs(os.path.dirname(OUT), exist_ok=True)
-        with open(OUT, "w") as f:
-            json.dump(compiler_layout(), f, indent=2)
-            f.write("\n")
-        print(f"wrote {os.path.relpath(OUT, ROOT)}")
-        return 0
-    if mode == "--check":
-        with open(OUT) as f:
-            committed = json.load(f)
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--check", action="store_true", help="fail if storage-layout/layout.json is stale")
+    g.add_argument("--compat", metavar="GIT_REF", help="fail if the layout is not upgrade-safe against GIT_REF")
+    args = p.parse_args(argv)
+
+    if args.check:
+        committed = json.loads(OUT.read_text())
         current = compiler_layout()
         check_probe_covers_namespaces(current)
         if committed != current:
@@ -138,20 +150,17 @@ def main(argv):
             return 1
         print("storage layout snapshot is up to date")
         return 0
-    if mode == "--compat":
-        ref = argv[2]
-        rel = os.path.relpath(OUT, ROOT)
-        try:
-            base_text = subprocess.run(
-                ["git", "show", f"{ref}:{rel}"], cwd=ROOT, check=True, capture_output=True, text=True
-            ).stdout
-        except subprocess.CalledProcessError:
-            print(f"no snapshot at {ref}:{rel}; nothing to compare against")
+
+    if args.compat:
+        rel = OUT.relative_to(ROOT)
+        result = subprocess.run(["git", "show", f"{args.compat}:{rel}"], cwd=ROOT, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"no snapshot at {args.compat}:{rel}; nothing to compare against")
             return 0
         current = compiler_layout()
         check_probe_covers_namespaces(current)
         errors = []
-        compare(json.loads(base_text), current, "layout", errors)
+        compare_layouts(json.loads(result.stdout), current, errors)
         if errors:
             print("storage layout is NOT upgrade-safe relative to base:")
             for e in errors:
@@ -159,9 +168,12 @@ def main(argv):
             return 1
         print("storage layout is upgrade-safe relative to base")
         return 0
-    print(__doc__, file=sys.stderr)
-    return 2
+
+    OUT.parent.mkdir(exist_ok=True)
+    OUT.write_text(json.dumps(compiler_layout(), indent=2) + "\n")
+    print(f"wrote {OUT.relative_to(ROOT)}")
+    return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    sys.exit(main(sys.argv[1:]))

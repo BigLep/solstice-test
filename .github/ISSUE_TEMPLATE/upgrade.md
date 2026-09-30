@@ -16,7 +16,7 @@ Runbook: [docs/UPGRADE.md](https://github.com/filecoin-project/solstice/blob/mai
 - [ ] [Merged](https://github.com/filecoin-project/solstice/blob/main/docs/UPGRADE.md#1-merge) the version bump and changelog entry; Storage Layout and Test CI green on the PR
   - version bump and changelog PR:
   - pre-release created by the Releaser:
-- [ ] [Rehearsed](https://github.com/filecoin-project/solstice/blob/main/docs/UPGRADE.md#2-rehearse) on a calibration fork (one run covers SRA and SWA)
+- [ ] Calibration: [rehearsed](https://github.com/filecoin-project/solstice/blob/main/docs/UPGRADE.md#2-rehearse) (one run covers SRA and SWA)
   - GitHub Action run:
 - [ ] Calibration: [implementations deployed](https://github.com/filecoin-project/solstice/blob/main/docs/UPGRADE.md#3-deploy-the-implementations)
   - GitHub Action run:
@@ -28,11 +28,13 @@ Runbook: [docs/UPGRADE.md](https://github.com/filecoin-project/solstice/blob/mai
   - SRA owner 2 tx:
   - SWA owner 1 tx:
   - SWA owner 2 tx:
-- [ ] Calibration: [hold tracked](https://github.com/filecoin-project/solstice/blob/main/docs/UPGRADE.md#5-track-the-hold) and [executed](https://github.com/filecoin-project/solstice/blob/main/docs/UPGRADE.md#6-execute)
+- [ ] Calibration: [hold tracked](https://github.com/filecoin-project/solstice/blob/main/docs/UPGRADE.md#5-track-the-hold)
+  - GitHub Action run (status):
+- [ ] Calibration: [executed](https://github.com/filecoin-project/solstice/blob/main/docs/UPGRADE.md#6-execute) (the run's summary has the transaction hashes)
   - GitHub Action run (execute):
-  - SRA execute tx:
-  - SWA execute tx:
 - [ ] Calibration: [verified](https://github.com/filecoin-project/solstice/blob/main/docs/UPGRADE.md#7-verify); the run appends the result to the pre-release
+  - GitHub Action run:
+- [ ] Mainnet: [rehearsed](https://github.com/filecoin-project/solstice/blob/main/docs/UPGRADE.md#2-rehearse)
   - GitHub Action run:
 - [ ] Mainnet: [implementations deployed](https://github.com/filecoin-project/solstice/blob/main/docs/UPGRADE.md#3-deploy-the-implementations)
   - GitHub Action run:
@@ -44,10 +46,10 @@ Runbook: [docs/UPGRADE.md](https://github.com/filecoin-project/solstice/blob/mai
   - SRA owner 2 tx:
   - SWA owner 1 tx:
   - SWA owner 2 tx:
-- [ ] Mainnet: [hold tracked](https://github.com/filecoin-project/solstice/blob/main/docs/UPGRADE.md#5-track-the-hold) and [executed](https://github.com/filecoin-project/solstice/blob/main/docs/UPGRADE.md#6-execute)
+- [ ] Mainnet: [hold tracked](https://github.com/filecoin-project/solstice/blob/main/docs/UPGRADE.md#5-track-the-hold)
+  - GitHub Action run (status):
+- [ ] Mainnet: [executed](https://github.com/filecoin-project/solstice/blob/main/docs/UPGRADE.md#6-execute) (the run's summary has the transaction hashes)
   - GitHub Action run (execute):
-  - SRA execute tx:
-  - SWA execute tx:
 - [ ] Mainnet: [verified](https://github.com/filecoin-project/solstice/blob/main/docs/UPGRADE.md#7-verify); this `verify` run promotes the pre-release to the final release
   - GitHub Action run:
   - final release:

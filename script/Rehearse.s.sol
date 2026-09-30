@@ -7,16 +7,17 @@ import {Epoch} from "../src/lib/Epoch.sol";
 import {UnanimousGovernance} from "../src/lib/UnanimousGovernance.sol";
 import {VerifyScript} from "./Verify.s.sol";
 
-/// @notice Rehearses a full SRA or SWA upgrade in a local fork of the target network. Sends nothing.
+/// @notice Rehearses the full SRA and SWA upgrade in a local fork of the target network. Sends nothing.
 /// @dev Usage:
 ///
-///        TARGET=sra forge script script/Rehearse.s.sol --rpc-url $ETH_RPC_URL
-///        TARGET=swa NEW_IMPLEMENTATION=0x... forge script script/Rehearse.s.sol --rpc-url $ETH_RPC_URL
+///        forge script script/Rehearse.s.sol --rpc-url $ETH_RPC_URL
+///        NEW_IMPLEMENTATION_SRA=0x... NEW_IMPLEMENTATION_SWA=0x... forge script script/Rehearse.s.sol --rpc-url ...
 ///
-///      Without NEW_IMPLEMENTATION the implementation is built from the checked-out source inside the fork.
-///      The script then impersonates both owner Safes to submit and approve, proves that executing early
-///      reverts with HoldUntil, rolls past the hold, executes, and runs every VerifyScript check on the
-///      result. Optional UPGRADE_CALLDATA is passed as the `data` argument.
+///      Both contracts are upgraded in the same fork, because the verifier rebuilds both from source and shared
+///      code changes both bytecodes. For each contract: the implementation is built from source in the fork
+///      (or, when given, the deployed address is checked against that build), both owner Safes are impersonated
+///      to submit and approve, early execution is shown to revert with HoldUntil, the hold is rolled past, and
+///      the upgrade executes. Then every VerifyScript check runs on the result.
 contract RehearseScript is VerifyScript {
     function run() public override returns (address sra, address swa) {
         string memory key = _configKey();
@@ -25,19 +26,8 @@ contract RehearseScript is VerifyScript {
         sra = _readAddress(json, key, "sra");
         swa = _readAddress(json, key, "swa");
 
-        Target memory t = _resolveTarget(config, sra, swa);
-        address expected = _buildImplementation(t, config, sra);
-        address impl = vm.envOr("NEW_IMPLEMENTATION", address(0));
-        if (impl == address(0)) {
-            impl = expected;
-            console.log("built implementation in the fork", impl);
-        } else {
-            _checkCode("rehearsal implementation", impl, expected);
-        }
-        bytes memory upgradeCall = _upgradeCall(impl);
-        console.log("task id", vm.toString(keccak256(upgradeCall)));
-
-        _governanceFlow(t, impl, upgradeCall);
+        _rehearse(_target(true, config, sra, swa), "NEW_IMPLEMENTATION_SRA", config, sra);
+        _rehearse(_target(false, config, sra, swa), "NEW_IMPLEMENTATION_SWA", config, sra);
 
         console.log("");
         console.log("running VerifyScript checks on the upgraded fork");
@@ -47,23 +37,35 @@ contract RehearseScript is VerifyScript {
         console.log("REHEARSAL COMPLETE");
     }
 
-    function _governanceFlow(Target memory t, address impl, bytes memory upgradeCall) internal {
+    function _rehearse(Target memory t, string memory implVar, Config memory config, address sra) internal {
+        string memory name = t.isSra ? "SRA" : "SWA";
+        address expected = _buildImplementation(t, config, sra);
+        address impl = vm.envOr(implVar, address(0));
+        if (impl == address(0)) {
+            impl = expected;
+            console.log(string.concat("[", name, "] built implementation in the fork"), impl);
+        } else {
+            _checkCode(string.concat(name, " rehearsal implementation"), impl, expected);
+        }
+        bytes memory upgradeCall = _upgradeCall(impl);
+        console.log(string.concat("[", name, "] task id"), vm.toString(keccak256(upgradeCall)));
+
         vm.prank(t.owner1);
-        _call(t.proxy, upgradeCall, "owner 1 submit");
+        _call(t.proxy, upgradeCall, string.concat("[", name, "] owner 1 submit"));
         vm.prank(t.owner2);
-        _call(t.proxy, upgradeCall, "owner 2 approve");
+        _call(t.proxy, upgradeCall, string.concat("[", name, "] owner 2 approve"));
 
         (bool ok, bytes memory ret) = t.proxy.call(upgradeCall);
         require(
             !ok && bytes4(ret) == UnanimousGovernance.HoldUntil.selector,
-            "early execution did not revert with HoldUntil"
+            string.concat(name, ": early execution did not revert with HoldUntil")
         );
-        console.log("early execution reverted with HoldUntil, as required");
+        console.log(string.concat("[", name, "] early execution reverted with HoldUntil, as required"));
 
         vm.roll(block.number + Epoch.unwrap(t.hold));
-        _call(t.proxy, upgradeCall, "execute after hold");
-        require(_implementationOf(t.proxy) == impl, "implementation slot did not change");
-        console.log("implementation slot now", impl);
+        _call(t.proxy, upgradeCall, string.concat("[", name, "] execute after hold"));
+        require(_implementationOf(t.proxy) == impl, string.concat(name, ": implementation slot did not change"));
+        console.log(string.concat("[", name, "] implementation slot now"), impl);
     }
 
     function _call(address target, bytes memory callData, string memory label) internal {

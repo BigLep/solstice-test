@@ -28,14 +28,23 @@ abstract contract UpgradeBase is DeploymentScript {
         return address(uint160(uint256(vm.load(proxy, IMPLEMENTATION_SLOT))));
     }
 
-    /// @dev Reads `TARGET` and resolves the proxy, owners and hold for it. Reverts on anything but sra or swa.
-    function _resolveTarget(Config memory config, address sra, address swa) internal view returns (Target memory t) {
+    /// @dev Reads `TARGET` (sra or swa) and resolves it. Reverts on anything else.
+    function _resolveTarget(Config memory config, address sra, address swa) internal view returns (Target memory) {
         string memory target = vm.envString("TARGET");
-        t.isSra = keccak256(bytes(target)) == keccak256("sra");
-        require(t.isSra || keccak256(bytes(target)) == keccak256("swa"), UnknownTarget(target));
-        t.proxy = t.isSra ? sra : swa;
-        t.owner1 = t.isSra ? config.sraOwner1 : config.swaOwner1;
-        t.owner2 = t.isSra ? config.sraOwner2 : config.swaOwner2;
+        bool isSra = keccak256(bytes(target)) == keccak256("sra");
+        require(isSra || keccak256(bytes(target)) == keccak256("swa"), UnknownTarget(target));
+        return _target(isSra, config, sra, swa);
+    }
+
+    function _target(bool isSra, Config memory config, address sra, address swa)
+        internal
+        pure
+        returns (Target memory t)
+    {
+        t.isSra = isSra;
+        t.proxy = isSra ? sra : swa;
+        t.owner1 = isSra ? config.sraOwner1 : config.swaOwner1;
+        t.owner2 = isSra ? config.sraOwner2 : config.swaOwner2;
         t.hold = config.hold;
     }
 
@@ -44,10 +53,9 @@ abstract contract UpgradeBase is DeploymentScript {
         return t.isSra ? _deploySraImplementation(config) : _deploySwaImplementation(config, sra);
     }
 
-    /// @dev `upgradeToAndCall(impl, UPGRADE_CALLDATA)`; `UPGRADE_CALLDATA` defaults to empty.
-    function _upgradeCall(address implementation) internal view returns (bytes memory) {
-        return
-            abi.encodeCall(UUPSUpgradeable.upgradeToAndCall, (implementation, vm.envOr("UPGRADE_CALLDATA", bytes(""))));
+    /// @dev `upgradeToAndCall(impl, "")`: upgrades carry no reinitializer call until a migration process exists.
+    function _upgradeCall(address implementation) internal pure returns (bytes memory) {
+        return abi.encodeCall(UUPSUpgradeable.upgradeToAndCall, (implementation, ""));
     }
 
     /// @dev UUPSUpgradeable stores `__self = address(this)` as an immutable, so an implementation's runtime code

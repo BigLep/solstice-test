@@ -20,11 +20,7 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
-        with:
-          version: v1.7.1
-          cache: true
+      - uses: ./.github/actions/setup
 
       - name: Snapshot is up to date
         run: tools/storage_layout.py --check
@@ -32,3 +28,11 @@ jobs:
       - name: Layout is upgrade-safe against base branch
         if: github.event_name == 'pull_request'
         run: tools/storage_layout.py --compat "origin/${{ github.base_ref }}"
+
+      - name: Unit tests for the layout gate and the upgrade tool
+        working-directory: tools
+        run: |
+          python3 -m unittest -q test_storage_layout
+          # Same dependency versions as the tool itself, taken from its lock file.
+          uv export --script upgrade.py --frozen --no-hashes -o "$RUNNER_TEMP/upgrade-requirements.txt"
+          uv run --with-requirements "$RUNNER_TEMP/upgrade-requirements.txt" python -m unittest -q test_upgrade

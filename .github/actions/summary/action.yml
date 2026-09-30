@@ -18,6 +18,6 @@ runs:
         {
           echo "## $TITLE"
           echo '```'
-          grep -vE '^\s*$|^Compiling|^Solc|^Compiler|^No files' "$LOG" 2>/dev/null | tail -60
+          grep -vE '^\s*$|^Compiling|^Solc|^Compiler|^No files' "$LOG" 2>/dev/null
           echo '```'
         } >> "$GITHUB_STEP_SUMMARY"

@@ -7,7 +7,6 @@ import {IERC1822Proxiable} from "@openzeppelin/contracts/interfaces/draft-IERC18
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 import {ServiceRewardsActor} from "../src/ServiceRewardsActor.sol";
-import {Epoch} from "../src/lib/Epoch.sol";
 import {UnanimousProxied} from "../src/lib/UnanimousProxied.sol";
 import {UpgradeBase} from "./UpgradeBase.sol";
 
@@ -68,14 +67,9 @@ contract VerifyScript is UpgradeBase {
         _checkInitialized("SRA", proxy);
         _checkOwners("SRA", proxy, config.sraOwner1, config.sraOwner2);
 
-        ServiceRewardsActor actor = ServiceRewardsActor(proxy);
-        require(actor.admittedCount() >= 1, "SRA: no admitted orchestrator");
-        require(
-            Epoch.unwrap(actor.EPOCHS_PER_QUARTER()) == Epoch.unwrap(config.epochsPerQuarter),
-            "SRA: EPOCHS_PER_QUARTER mismatch"
-        );
-        require(Epoch.unwrap(actor.SRA_UPGRADE_HOLD()) == Epoch.unwrap(config.hold), "SRA: SRA_UPGRADE_HOLD mismatch");
-        console.log("[SRA] orchestrator registry seeded, epoch params match");
+        // Immutables (epoch parameters, hold, owners) are proven by the code-hash match above; only state is checked here.
+        require(ServiceRewardsActor(proxy).admittedCount() >= 1, "SRA: no admitted orchestrator");
+        console.log("[SRA] orchestrator registry seeded");
     }
 
     function _verifySwa(Config memory config, address sraProxy, address proxy) internal {
@@ -113,6 +107,8 @@ contract VerifyScript is UpgradeBase {
         console.log(string.concat("[", label, "] proxy code matches ERC1967Proxy"));
     }
 
+    /// @dev Already implied by the code-hash match; kept as a direct, cheap statement that the proxy will accept
+    ///      the next upgrade.
     function _checkImplementationIsUups(string memory label, address implementation) internal view {
         require(
             IERC1822Proxiable(implementation).proxiableUUID() == IMPLEMENTATION_SLOT,

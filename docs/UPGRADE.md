@@ -11,14 +11,14 @@ How a merged code change becomes the live implementation behind the ServiceRewar
 | Version | [`version.json`](../version.json) and [`CHANGELOG.md`](../CHANGELOG.md) | One version covers both contracts. Bumping it on `main` makes the [Releaser workflow](https://github.com/filecoin-project/solstice/actions/workflows/releaser.yml) ([source](../.github/workflows/releaser.yml)) tag the commit and open a pre-release with the changelog section. |
 | Owners | Two [Safe](https://safe.filecoin.io) multisigs per contract: `sraOwner1`, `sraOwner2`, `swaOwner1`, `swaOwner2` in [`deployments.json`](../deployments.json) | The only parties that can approve an upgrade. |
 | Hold | `hold` in [`deployments.json`](../deployments.json), fixed at deployment as an immutable and the same for every task | Epochs that must pass after the second owner's approval before a task can execute. |
-| Operations key | `DEPLOYER_PRIVATE_KEY` on the [`calibnet`](https://github.com/filecoin-project/solstice/settings/environments/22478295461/edit) and [`mainnet`](https://github.com/filecoin-project/solstice/settings/environments/22478417501/edit) [environments](https://github.com/filecoin-project/solstice/settings/environments) | Deploys implementations, queues proposals on the owner Safes (it is registered there as a [proposer](https://help.safe.global/articles/1671337645-proposers)), executes, pays gas. A plain key with no power over the contracts; not an owner key. |
+| Operations key (`DEPLOYER_PRIVATE_KEY`) | Secret on the [`calibnet`](https://github.com/filecoin-project/solstice/settings/environments/22478295461/edit) and [`mainnet`](https://github.com/filecoin-project/solstice/settings/environments/22478417501/edit) [environments](https://github.com/filecoin-project/solstice/settings/environments) | Deploys implementations, queues proposals on the owner Safes (it is registered there as a [proposer](https://help.safe.global/articles/1671337645-proposers)), executes, pays gas. A plain key with no power over the contracts; not an owner key. |
 
 The upgrade call is [`upgradeToAndCall(newImplementation, data)`](../lib/openzeppelin-contracts/contracts/proxy/utils/UUPSUpgradeable.sol) on the proxy. Its task id is `keccak256(calldata)`, so both owners must send byte-identical calldata with zero value.
 
 | Step | Who | Effect |
 |---|---|---|
-| Submit | Owner Safe 1 | `Submitted` and `Approved` events. Nothing changes yet. |
-| Approve | Owner Safe 2 | Second `Approved`. The hold starts at this block. |
+| Submit | Whichever owner Safe executes first | `Submitted` and `Approved` events. Nothing changes yet. |
+| Approve | The other owner Safe | Second `Approved`. The hold starts at this block. |
 | Hold | Anyone | Execution reverts with `HoldUntil(epoch)` until the hold elapses. Either owner can `veto(taskId)`. |
 | Execute | Anyone | The proxy's implementation slot changes, `data` (if any) runs, the task is deleted. |
 
@@ -38,7 +38,7 @@ The PR carries the code change, the next version in [`version.json`](../version.
 
 ### 2. Rehearse
 
-Dispatch [Upgrade](https://github.com/filecoin-project/solstice/actions/workflows/upgrade.yml) with operation `rehearse`, network Calibnet, ref the tag. For each contract it runs [`script/Rehearse.s.sol`](../script/Rehearse.s.sol): a local fork in which the implementation is built from source, both owner Safes are impersonated to submit and approve, early execution is shown to revert, the hold is rolled past, the upgrade executes, and every verifier check runs. The summary ends with `REHEARSAL COMPLETE` for each contract or the failing step. Nothing is sent.
+Dispatch [Upgrade](https://github.com/filecoin-project/solstice/actions/workflows/upgrade.yml) with operation `rehearse`, the network, ref the tag. It runs [`script/Rehearse.s.sol`](../script/Rehearse.s.sol): one local fork in which both implementations are built from source, and for each contract both owner Safes are impersonated to submit and approve, early execution is shown to revert, the hold is rolled past, and the upgrade executes; then every verifier check runs on the result. The summary ends with `REHEARSAL COMPLETE` or the failing step. Nothing is sent. Rehearse on calibration before step 3, and again on mainnet before its step 3, since the two networks have different holds and parameters.
 
 ### 3. Deploy the implementations
 
@@ -48,18 +48,18 @@ Dispatch [Deploy Contract](https://github.com/filecoin-project/solstice/actions/
 
 Dispatch [Upgrade](https://github.com/filecoin-project/solstice/actions/workflows/upgrade.yml) with operation `propose`, the network, and both implementation addresses. This runs in the network's [environment](https://github.com/filecoin-project/solstice/settings/environments), so it waits for a required reviewer other than the dispatcher: two humans sign off on every proposal. The reviewer's job is to confirm the run's ref is a `v*` tag whose commit is on `main` before approving. The run then rebuilds each implementation from the tag and refuses to continue unless the on-chain runtime code matches ([`script/Upgrade.s.sol`](../script/Upgrade.s.sol)), and queues the upgrade transaction on all four owner Safes through the [Filecoin Safe Transaction Service](https://transaction.safe.filecoin.io/).
 
-The proposer then tells each owner group that their Safe has a transaction queued. Each owner group confirms and executes it in the [Safe app](https://safe.filecoin.io). Owner 1's execution is the submit; owner 2's is the approve, and the hold starts when it lands.
+The proposer then tells each owner group that their Safe has a transaction queued. Each owner group confirms and executes it in the [Safe app](https://safe.filecoin.io), in either order: the first execution is the submit, the second is the approve, and the hold starts when the second lands. Rerunning `propose` is safe; it skips Safes where the transaction is already queued.
 
 > [!NOTE]
 > If there is an issue with [Safe's proposer functionality](https://help.safe.global/articles/1671337645-proposers), the same run summary prints each proxy address and calldata; the owners can enter those in the Safe app's transaction builder instead. It is the same transaction.
 
 ### 5. Track the hold
 
-Dispatch [Upgrade](https://github.com/filecoin-project/solstice/actions/workflows/upgrade.yml) with operation `status` and both implementation addresses. The summary shows, for SRA and SWA, how many owners have approved and the epoch the hold ends. If something is wrong, either owner cancels with the veto calldata printed in the same summary.
+Dispatch [Upgrade](https://github.com/filecoin-project/solstice/actions/workflows/upgrade.yml) with operation `status` and both implementation addresses. The summary shows, for SRA and SWA, how many owners have approved and the epoch the hold ends. If something is wrong, either owner cancels with the veto calldata printed in the same summary. `status` reports whatever task the given addresses name, so running it with the previous implementation addresses shows a prepared rollback.
 
 ### 6. Execute
 
-After the holds, dispatch [Upgrade](https://github.com/filecoin-project/solstice/actions/workflows/upgrade.yml) with operation `execute` and both implementation addresses. Anyone may execute, but running it through the workflow keeps the record in one place. The run fails if either transaction reverts or a proxy's implementation slot does not change.
+After the holds, dispatch [Upgrade](https://github.com/filecoin-project/solstice/actions/workflows/upgrade.yml) with operation `execute` and both implementation addresses. Anyone may execute, but running it through the workflow keeps the record in one place. The two holds end at different epochs because each contract has its own owner Safes; the run sends nothing until both are executable, and fails if either transaction reverts or a proxy's implementation slot does not change.
 
 ### 7. Verify
 
@@ -67,13 +67,13 @@ Dispatch [Upgrade](https://github.com/filecoin-project/solstice/actions/workflow
 
 ### 8. Repeat for mainnet
 
-Repeat steps 3 to 7 on mainnet.
+Repeat steps 2 to 7 on mainnet.
 
 ## Rollback
 
 - Before execution, rollback is a veto: either owner sends the veto calldata printed by `status`, and the task is gone. Nothing has changed on chain, so this is always safe.
 - After execution, rollback is a new upgrade back to the previous implementations, subject to the full hold. It is safe when the new version only appended storage (which is all the layout gate allows), because the previous code simply ignores the new fields. It is not safe if the new version ran a reinitializer or migration that reinterpreted existing storage; that case needs its own design before it is attempted. Keep the previous implementation addresses in the tracking issue so the rollback proposal can be built from them.
-- Optional, for a change risky enough to want a fast rollback: after the owners approve the upgrade, also propose the rollback (an upgrade back to the previous implementations, `propose` with the previous addresses) and have owner 1 submit it at once. Have owner 2 approve it only after the monitoring window you want, because a task's hold starts on the second approval and the hold length is fixed: approving the rollback N hours after the upgrade makes it executable N hours after the upgrade could be. Once its hold ends, anyone may execute the rollback until an owner vetoes it, so the last step of the upgrade is an owner vetoing the prepared rollback once step 7 has passed and the window has elapsed. Pass `--previous-sra` and `--previous-swa` to `status` (locally) to see the prepared rollback's state alongside the upgrade's; the issue template has a checkbox for the final veto.
+- Optional, for a change risky enough to want a fast rollback: once the upgrade has executed (step 6), dispatch `propose` with the previous implementation addresses and ref the previous version's tag (the code check rebuilds from the checked-out ref, and a proposal to the current implementation is rejected, so this only works after execution). Have the first owner execute it at once and the second owner execute it at the start of the monitoring window you want; the rollback becomes executable one hold after that second execution. From then until an owner vetoes it, anyone can execute it, so the final step is that veto; the issue template has a checkbox for it, and `status` with the previous addresses shows the rollback task.
 
 ## Related
 

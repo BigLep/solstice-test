@@ -5,3 +5,6 @@ broadcast/
 
 # VIM
 *.swp
+
+# Python
+__pycache__/

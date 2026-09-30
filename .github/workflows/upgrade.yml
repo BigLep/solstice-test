@@ -5,8 +5,9 @@ name: Upgrade
 # the release tag as the ref. Both contracts are upgraded together, so every operation takes both addresses.
 #   rehearse, status  read-only, no secrets
 #   verify            read-only on chain; appends the result to the GitHub release (needs contents: write)
-#   propose, execute  run in the network's environment, which holds DEPLOYER_PRIVATE_KEY and whose required
-#                     reviewers (with self-review prevented) provide the dispatcher-plus-approver sign-off
+#   propose, execute  run in the network's environment, which holds the operations key DEPLOYER_PRIVATE_KEY and
+#                     whose required reviewers (with self-review prevented) provide the dispatcher-plus-approver
+#                     sign-off
 on:
   workflow_dispatch:
     inputs:
@@ -108,9 +109,9 @@ jobs:
           network: ${{ inputs.network }}
       - name: Run
         env:
-          # One operations key: it deploys implementations (Deploy Contract), proposes (registered as a proposer
+          # The operations key: it deploys implementations (Deploy Contract), proposes (registered as a proposer
           # on the owner Safes) and executes. It has no power over the contracts.
-          PROPOSER_PRIVATE_KEY: ${{ secrets.DEPLOYER_PRIVATE_KEY }}
+          DEPLOYER_PRIVATE_KEY: ${{ secrets.DEPLOYER_PRIVATE_KEY }}
         run: |
           set -o pipefail
           uv run --quiet --locked tools/upgrade.py "$OPERATION" --sra "$SRA" --swa "$SWA" 2>&1 | tee "$RUNNER_TEMP/out.txt"
