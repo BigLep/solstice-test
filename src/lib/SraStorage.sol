@@ -25,7 +25,7 @@ library SraStorage {
 
     /// @custom:storage-location erc7201:Solstice.SRA.Quarter
     struct SraStorageQuarter {
-        uint64 lastSubmittedQuarter; // 0 = no real quarter submitted; quarter 0 is reserved
+        uint128 lastSubmittedQuarter; // 0 = no real quarter submitted; quarter 0 is reserved
         uint64 mirrorAQuarter; // slot A's quarter tag: quarter q stored as q + 1; 0 = never written
         uint64 mirrorBQuarter; // slot B's quarter tag: quarter q stored as q + 1; 0 = never written
         mapping(uint64 quarter => FixedU18) totalUsd;

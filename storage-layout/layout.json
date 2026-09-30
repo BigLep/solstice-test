@@ -285,20 +285,20 @@
         "name": "lastSubmittedQuarter",
         "slot": 0,
         "offset": 0,
-        "type": "uint64",
-        "bytes": 8
+        "type": "uint128",
+        "bytes": 16
       },
       {
         "name": "mirrorAQuarter",
         "slot": 0,
-        "offset": 8,
+        "offset": 16,
         "type": "uint64",
         "bytes": 8
       },
       {
         "name": "mirrorBQuarter",
         "slot": 0,
-        "offset": 16,
+        "offset": 24,
         "type": "uint64",
         "bytes": 8
       },
