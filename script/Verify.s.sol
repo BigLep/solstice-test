@@ -3,37 +3,35 @@ pragma solidity ^0.8.36;
 
 import {console} from "forge-std/console.sol";
 
-import {IERC1822Proxiable} from "@openzeppelin/contracts/interfaces/draft-IERC1822.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 import {ServiceRewardsActor} from "../src/ServiceRewardsActor.sol";
 import {UnanimousProxied} from "../src/lib/UnanimousProxied.sol";
 import {UpgradeBase} from "./UpgradeBase.sol";
 
-/// @notice Read-only verification of the SRA and SWA proxies recorded in `deployments.json`, valid both right
-///         after deployment and after any number of upgrades.
+/// @notice Read-only verification of the SRA and SWA proxies recorded in `deployments.json`, valid right after
+///         deployment and after any number of upgrades.
 /// @dev Run against a live chain with no `--broadcast`:
 ///
 ///        forge script script/Verify.s.sol --rpc-url $ETH_RPC_URL
+///        NEW_IMPLEMENTATION_SRA=0x... NEW_IMPLEMENTATION_SWA=0x... forge script script/Verify.s.sol --rpc-url ...
 ///
-///      The script rebuilds both implementations and both proxies locally from the same source, compiler
-///      settings and `deployments.json` config, then compares the resulting runtime code against the live
-///      contracts. Because immutables (owners, hold, orchestrator, epoch parameters, SWA's SRA pointer) are
-///      baked into runtime code, a matching code hash proves every constructor argument. It then checks the
-///      ERC-1967 slot, that the proxy is initialized, that the owner set is exactly the two configured owners,
-///      and that the namespaced state each `initialize()` seeds is present (at least one admitted orchestrator,
-///      gate parameters set). It does not assume deployment-time values for state that legitimately changes.
+///      Rebuilds both implementations and both proxies locally from the same source, compiler settings and
+///      `deployments.json` config, then compares runtime code against the live contracts. Because immutables
+///      (owners, hold, orchestrator, epoch parameters, SWA's SRA pointer) are baked into runtime code, a matching
+///      code hash proves every constructor argument and UUPS compatibility. It then checks the owner set is
+///      exactly the two configured owners and that the state each `initialize()` seeds is present, without
+///      assuming deployment-time values for state that legitimately changes. With the NEW_IMPLEMENTATION_*
+///      overrides set, the code comparison is made against those addresses instead of the proxies' current
+///      implementations: that is how a deployed but not yet live implementation is checked before it is proposed.
 ///      Any failure reverts with a message naming the check.
 contract VerifyScript is UpgradeBase {
-    /// @dev OpenZeppelin Initializable ERC-7201 slot: uint64 _initialized | bool _initializing (byte 8)
-    bytes32 internal constant INITIALIZABLE_STORAGE =
-        0xf0c57e16840df040f15088dc2f81fe391c3923bec73e23a9662efc9c229c6a00;
     /// @dev OwnersLibrary.OWNERS_SLOT (erc7201:Solstice.Owners)
     bytes32 internal constant OWNERS_SLOT = 0x7d2e7f914625694dd929b468ac404d7943373f4d24421c78ac93b57cc8efb500;
     /// @dev GateParamsLibrary.GATE_PARAMS_SLOT (erc7201:Solstice.GateParams)
     bytes32 internal constant GATE_PARAMS_SLOT = 0xf9abab00248d945495524c8caf6be2b837274c1becd1964fb3775f62fd6e4600;
 
-    function run() public virtual returns (address sra, address swa) {
+    function run() public returns (address sra, address swa) {
         string memory key = _configKey();
         string memory json = vm.readFile(CONFIG_PATH);
         Config memory config = _loadConfig(json, key);
@@ -48,41 +46,31 @@ contract VerifyScript is UpgradeBase {
         console.log("sra proxy     ", sra);
         console.log("swa proxy     ", swa);
 
-        _verifySra(config, sra);
-        _verifySwa(config, sra, swa);
+        _verifySra(config, sra, vm.envOr("NEW_IMPLEMENTATION_SRA", address(0)));
+        _verifySwa(config, sra, swa, vm.envOr("NEW_IMPLEMENTATION_SWA", address(0)));
 
         console.log("");
         console.log("ALL CHECKS PASSED");
     }
 
-    function _verifySra(Config memory config, address proxy) internal {
-        address implementation = _implementationOf(proxy);
-        console.log("");
-        console.log("[SRA] implementation", implementation);
-
-        address expected = _deploySraImplementation(config);
+    function _verifySra(Config memory config, address proxy, address candidate) internal {
+        address implementation = _subject("SRA", proxy, candidate);
+        address expected = _buildImplementation(true, config, proxy);
         _checkCode("SRA implementation", implementation, expected);
         _checkProxy("SRA", proxy, expected);
-        _checkImplementationIsUups("SRA", implementation);
-        _checkInitialized("SRA", proxy);
         _checkOwners("SRA", proxy, config.sraOwner1, config.sraOwner2);
 
-        // Immutables (epoch parameters, hold, owners) are proven by the code-hash match above; only state is checked here.
+        // Immutables are proven by the code-hash match above; only seeded state is checked here.
         require(ServiceRewardsActor(proxy).admittedCount() >= 1, "SRA: no admitted orchestrator");
         console.log("[SRA] orchestrator registry seeded");
     }
 
-    function _verifySwa(Config memory config, address sraProxy, address proxy) internal {
-        address implementation = _implementationOf(proxy);
-        console.log("");
-        console.log("[SWA] implementation", implementation);
-
+    function _verifySwa(Config memory config, address sraProxy, address proxy, address candidate) internal {
+        address implementation = _subject("SWA", proxy, candidate);
         // The SRA pointer is an immutable, so a matching code hash proves SWA points at the live SRA proxy.
-        address expected = _deploySwaImplementation(config, sraProxy);
+        address expected = _buildImplementation(false, config, sraProxy);
         _checkCode("SWA implementation", implementation, expected);
         _checkProxy("SWA", proxy, expected);
-        _checkImplementationIsUups("SWA", implementation);
-        _checkInitialized("SWA", proxy);
         _checkOwners("SWA", proxy, config.swaOwner1, config.swaOwner2);
 
         // GateParamsLibrary.init() seeds lastCheckedQuarter (word 0) and params.target.base (word 1); both
@@ -98,6 +86,18 @@ contract VerifyScript is UpgradeBase {
     // Checks
     // ------------------------------------------------------------------------
 
+    /// @dev The implementation whose code is compared: the proxy's current one, or the candidate override, which
+    ///      must be a different, deployed contract.
+    function _subject(string memory label, address proxy, address candidate) internal view returns (address) {
+        address current = _implementationOf(proxy);
+        console.log("");
+        console.log(string.concat("[", label, "] current implementation"), current);
+        if (candidate == address(0)) return current;
+        require(candidate != current, string.concat(label, ": candidate equals the current implementation"));
+        console.log(string.concat("[", label, "] checking candidate"), candidate);
+        return candidate;
+    }
+
     /// @dev Compares the proxy's runtime code to a locally constructed ERC1967Proxy. The proxy has no
     ///      immutables, so this proves it is an unmodified OpenZeppelin ERC1967Proxy built with our settings.
     function _checkProxy(string memory label, address proxy, address expectedImplementation) internal {
@@ -107,29 +107,11 @@ contract VerifyScript is UpgradeBase {
         console.log(string.concat("[", label, "] proxy code matches ERC1967Proxy"));
     }
 
-    /// @dev Already implied by the code-hash match; kept as a direct, cheap statement that the proxy will accept
-    ///      the next upgrade.
-    function _checkImplementationIsUups(string memory label, address implementation) internal view {
-        require(
-            IERC1822Proxiable(implementation).proxiableUUID() == IMPLEMENTATION_SLOT,
-            string.concat(label, ": proxiableUUID mismatch")
-        );
-    }
-
-    /// @dev Initialized at version 1 by deployment; a later reinitializer(n) upgrade raises it to n.
-    function _checkInitialized(string memory label, address proxy) internal view {
-        uint256 word = uint256(vm.load(proxy, INITIALIZABLE_STORAGE));
-        uint64 initialized = uint64(word);
-        bool initializing = uint8(word >> 64) != 0;
-        console.log(string.concat("[", label, "] initialized version"), initialized);
-        require(initialized >= 1, string.concat(label, ": not initialized"));
-        require(!initializing, string.concat(label, ": still initializing"));
-    }
-
     /// @dev Owners struct: word 0 is the ownerInfo mapping base, word 1 packs nextBitCursor (uint8, byte 0)
-    ///      and allOwners (uint160, bytes 1..20). Compares against the owners in deployments.json, so an owner
-    ///      replacement (`replaceOwner`) must update that file; the rebuilt-code check then passes again only once
-    ///      an implementation built from the updated config is live.
+    ///      and allOwners (uint160, bytes 1..20). Owner bits are only ever set by `initialize()` or `replaceOwner`,
+    ///      so a correct owner set also proves the proxy was initialized. Compares against the owners in
+    ///      deployments.json, so an owner replacement (`replaceOwner`) must update that file; the rebuilt-code
+    ///      check then passes again only once an implementation built from the updated config is live.
     function _checkOwners(string memory label, address proxy, address owner1, address owner2) internal view {
         require(owner1 != owner2, string.concat(label, ": owner1 == owner2"));
         require(_ownerBit(proxy, owner1) != 0, string.concat(label, ": owner1 not an owner"));

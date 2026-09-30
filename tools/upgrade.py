@@ -17,12 +17,9 @@ Environment:
   DRY_RUN=1             for propose: build and sign the Safe transactions but do not post them
   NETWORK_NAME          for `verify --record-release`: the label written into the release ("Calibnet" or "Mainnet")
 
-`propose` first runs script/Upgrade.s.sol for each contract, which rebuilds the implementation from the checked-out
-source and deployments.json and refuses to continue unless the on-chain runtime code matches, so the queued
-transaction always refers to code built from this commit. It then posts the same transaction to each owner Safe
-through the Filecoin Safe Transaction Service, skipping Safes where it is already queued. The proposer then tells
-the owner groups; each confirms and executes in the Safe app. The hold starts when the second owner's transaction
-lands.
+`propose` runs script/Verify.s.sol with the new addresses as candidates, which rebuilds both implementations from
+the checked-out source and refuses unless the on-chain runtime code matches, so the queued transactions always
+refer to code built from this commit. See docs/UPGRADE.md step 4 for what happens after the proposals are queued.
 """
 
 import argparse
@@ -137,10 +134,6 @@ class Task:
         modified, approvals = self.state()
         return modified != 0 and approvals >= 2 and block >= modified + self.chain.hold
 
-    def check_code(self):
-        print(f"== {self.name}: checking {self.impl} against a local build (script/Upgrade.s.sol) ==")
-        forge_script("script/Upgrade.s.sol", {"TARGET": self.target, "NEW_IMPLEMENTATION": self.impl})
-
     def summary(self):
         print()
         print(f"== {self.name} upgrade on chain {self.chain.chain_id} ==")
@@ -199,9 +192,8 @@ def tasks(chain, args):
 
 
 def cmd_rehearse(args):
-    env = {f"NEW_IMPLEMENTATION_{t.upper()}": getattr(args, t) for t in TARGETS if getattr(args, t)}
     print("== Rehearsing the SRA and SWA upgrades in a local fork (script/Rehearse.s.sol) ==")
-    forge_script("script/Rehearse.s.sol", env)
+    forge_script("script/Rehearse.s.sol")
 
 
 def cmd_propose(args):
@@ -209,8 +201,10 @@ def cmd_propose(args):
     key, account = key_account("propose")
     base_url = SAFE_SERVICES.get(chain.chain_id) or die(f"no Safe Transaction Service known for chain {chain.chain_id}")
     api = TransactionServiceApi(EthereumNetwork(chain.chain_id), ethereum_client=chain.client, base_url=base_url)
-    for task in tasks(chain, args):
-        task.check_code()
+    todo = tasks(chain, args)
+    print("== Checking both candidates against a local build of the checked-out source (script/Verify.s.sol) ==")
+    forge_script("script/Verify.s.sol", {f"NEW_IMPLEMENTATION_{t.name}": t.impl for t in todo})
+    for task in todo:
         task.summary()
         print()
         print(f"== Queuing the {task.name} upgrade on its owner Safes as {account.address} via {base_url} ==")
@@ -348,7 +342,7 @@ def main(argv):
         sp.add_argument("--sra", type=address, required=required, help=f"{what} SRA implementation address")
         sp.add_argument("--swa", type=address, required=required, help=f"{what} SWA implementation address")
 
-    impls(sub.add_parser("rehearse", help="dry-run both upgrades in a local fork; without addresses, build from source"), False)
+    sub.add_parser("rehearse", help="dry-run both upgrades in a local fork, built from the checked-out source")
     impls(sub.add_parser("propose", help="check both implementations and queue the upgrades on the owner Safes"), True)
     impls(sub.add_parser("status", help="approvals and hold end for both tasks (pass previous addresses to see a prepared rollback)"), True, what="upgrade-target")
     impls(sub.add_parser("execute", help="send both upgrades once both holds have elapsed"), True)

@@ -16,7 +16,7 @@ from upgrade import VETO_SELECTOR, already_queued, next_nonce, script_logs, upgr
 
 class Calldata(unittest.TestCase):
     def test_known_answer(self):
-        # Matches script/Upgrade.s.sol's former abi.encodeCall(upgradeToAndCall, (impl, "")) output.
+        # Matches abi.encodeCall(UUPSUpgradeable.upgradeToAndCall, (impl, "")) as built in script/Rehearse.s.sol.
         cd = upgrade_calldata("0x64fff87D5679faE19201c628e6A5B0591961038e")
         self.assertEqual(
             cd.hex(),

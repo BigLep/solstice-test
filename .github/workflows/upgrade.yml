@@ -1,13 +1,7 @@
 name: Upgrade
 
-# One step of an SRA/SWA implementation upgrade, dispatched from the Actions tab so the record lives in a run.
-# Each job is a thin wrapper around tools/upgrade.py; see docs/UPGRADE.md for the sequence. Always dispatch with
-# the release tag as the ref. Both contracts are upgraded together, so every operation takes both addresses.
-#   rehearse, status  read-only, no secrets
-#   verify            read-only on chain; appends the result to the GitHub release (needs contents: write)
-#   propose, execute  run in the network's environment, which holds the operations key DEPLOYER_PRIVATE_KEY and
-#                     whose required reviewers (with self-review prevented) provide the dispatcher-plus-approver
-#                     sign-off
+# One step of an SRA/SWA implementation upgrade, dispatched with the release tag as the ref so the record lives
+# in a run. Each job is a thin wrapper around tools/upgrade.py; docs/UPGRADE.md has the sequence.
 on:
   workflow_dispatch:
     inputs:
@@ -29,11 +23,11 @@ on:
           - execute
           - verify
       sra_implementation:
-        description: New SRA implementation address (required for propose, status, execute; optional for rehearse)
+        description: New SRA implementation address (propose, status, execute)
         required: false
         type: string
       swa_implementation:
-        description: New SWA implementation address (required for propose, status, execute; optional for rehearse)
+        description: New SWA implementation address (propose, status, execute)
         required: false
         type: string
 
@@ -65,7 +59,11 @@ jobs:
       - name: Run
         run: |
           set -o pipefail
-          uv run --quiet --locked tools/upgrade.py "$OPERATION" ${SRA:+--sra "$SRA"} ${SWA:+--swa "$SWA"} 2>&1 | tee "$RUNNER_TEMP/out.txt"
+          if [ "$OPERATION" = rehearse ]; then
+            uv run --quiet --locked tools/upgrade.py rehearse 2>&1 | tee "$RUNNER_TEMP/out.txt"
+          else
+            uv run --quiet --locked tools/upgrade.py "$OPERATION" --sra "$SRA" --swa "$SWA" 2>&1 | tee "$RUNNER_TEMP/out.txt"
+          fi
       - uses: ./.github/actions/summary
         if: always()
         with:

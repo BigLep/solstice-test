@@ -6,11 +6,13 @@ The contracts keep every piece of state in ERC-7201 namespaced structs reached t
 state variable per namespace; this tool asks the compiler for that probe's layout and keeps a normalized copy
 in storage-layout/layout.json. The slot constants themselves are pinned by test/StorageSlots.t.sol.
 
-Upgrade-safe (--compat passes) means: every namespace present at <ref> is still there with the same type; every
-struct member present at <ref> is still there, in the same order, at the same slot and offset within its struct,
-with the same type; every non-struct type keeps its byte width; and anything new is appended (a new member after
-the existing ones, or a new namespace). Anything else would reinterpret live storage behind the proxy and needs
-a migration, which docs/UPGRADE.md does not cover.
+Upgrade-safe (--compat passes) means: every namespace keeps its ERC-7201 id string, and so its base slot; every
+storage leaf present at <ref> (a non-struct field, reached through
+any nesting of structs, mapping values and array elements) is still there at the same slot and offset within
+its region, with the same type and byte width, and array elements keep their size. New fields may be added
+anywhere that moves nothing: appended to a struct, in unused bytes of an existing slot, or as a new namespace.
+Anything else would reinterpret live storage behind the proxy and needs a migration, which docs/UPGRADE.md
+does not cover.
 """
 
 import argparse
@@ -23,7 +25,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 PROBE = "StorageLayoutProbe"
 OUT = ROOT / "storage-layout" / "layout.json"
-NAMESPACE_RE = re.compile(r"@custom:storage-location\s+erc7201:\S+[^{]*?struct\s+([A-Za-z0-9_]+)\s*\{", re.S)
+NAMESPACE_RE = re.compile(r"@custom:storage-location\s+erc7201:(\S+)[^{]*?struct\s+([A-Za-z0-9_]+)\s*\{", re.S)
 
 
 def compiler_layout():
@@ -37,7 +39,7 @@ def compiler_layout():
         print("forge inspect failed (does the project compile?):", file=sys.stderr)
         print(result.stderr.strip()[-2000:], file=sys.stderr)
         sys.exit(1)
-    return normalize(json.loads(result.stdout))
+    return with_namespaces(normalize(json.loads(result.stdout)))
 
 
 def normalize(layout):
@@ -74,64 +76,91 @@ def normalize(layout):
     ]
 
 
-def namespaced_structs():
-    """Names of every struct in src/ declared with an ERC-7201 @custom:storage-location tag."""
-    names = set()
-    for path in (ROOT / "src").rglob("*.sol"):
-        names.update(NAMESPACE_RE.findall(path.read_text()))
-    return names
+def keccak(data: bytes) -> bytes:
+    """keccak256 via cast, which is already required; the standard library has no keccak."""
+    out = subprocess.run(["cast", "keccak", "0x" + data.hex()], capture_output=True, text=True, check=True).stdout
+    return bytes.fromhex(out.strip()[2:])
 
 
-def check_probe_covers_namespaces(layout):
-    """Fail if a namespaced struct has no variable in StorageLayoutProbe (its layout would go unchecked)."""
-    probed = {e["type"].split(".")[-1] for e in layout}
-    missing = sorted(namespaced_structs() - probed)
+def erc7201_slot(namespace_id):
+    """keccak256(abi.encode(uint256(keccak256(id)) - 1)) & ~0xff, the ERC-7201 base slot for a namespace id."""
+    inner = int.from_bytes(keccak(namespace_id.encode()), "big") - 1
+    return "0x" + (int.from_bytes(keccak(inner.to_bytes(32, "big")), "big") & ~0xFF).to_bytes(32, "big").hex()
+
+
+def namespaces():
+    """{struct name: {"id": namespace id, "slot": derived base slot}} for every struct in src/ declared with an
+    ERC-7201 @custom:storage-location tag. The id string decides where the namespace's data lives in the proxy;
+    changing it relocates the whole namespace to an empty region, so it is recorded and compared like a leaf."""
+    found = {}
+    for path in sorted((ROOT / "src").rglob("*.sol")):
+        for namespace_id, struct in NAMESPACE_RE.findall(path.read_text()):
+            found[struct] = {"id": namespace_id, "slot": erc7201_slot(namespace_id)}
+    return found
+
+
+def with_namespaces(layout):
+    """Attach each probe variable's namespace id and base slot; fail if a namespaced struct is not probed."""
+    known = namespaces()
+    probed = set()
+    for e in layout:
+        struct = e["type"].split(".")[-1]
+        if struct in known:
+            e["namespace"], e["namespaceSlot"] = known[struct]["id"], known[struct]["slot"]
+            probed.add(struct)
+    missing = sorted(set(known) - probed)
     if missing:
         print("namespaced structs missing from test/layout/StorageLayoutProbe.sol: " + ", ".join(missing), file=sys.stderr)
         sys.exit(1)
+    return layout
 
 
-def compare_entry(b, n, here, errors, position):
-    """One base entry against its counterpart: type always; slot and offset for struct members (`position`);
-    byte width for everything except structs, which may legitimately grow by appending members."""
-    keys = ["type"] + (["slot", "offset"] if position else []) + ([] if "members" in b else ["bytes"])
-    for key in keys:
-        if b.get(key) != n.get(key):
-            errors.append(f"{here}: {key} changed {b.get(key)!r} -> {n.get(key)!r}")
-    if "members" in b:
-        if "members" not in n:
-            errors.append(f"{here}: lost members")
+def leaves(layout):
+    """Flatten a normalized layout to {path: (slot, offset, type, bytes)} for every leaf (non-struct) entry.
+
+    Slots are counted from the start of the region the leaf lives in: a namespace, a mapping value or an array
+    element. Regions restart at 0 because their absolute position is either an ERC-7201 constant (pinned by
+    test/StorageSlots.t.sol) or a hash. Array elements also get a `#stride` leaf carrying the element's byte
+    size, since growing an element type moves every later element even though no member of it moves.
+    """
+    out = {}
+
+    def walk(entry, path, base_slot):
+        if "members" in entry:
+            for m in entry["members"]:
+                walk(m, f"{path}.{m['name']}", base_slot + m["slot"])
         else:
-            compare_members(b["members"], n["members"], here, errors)
-    for key in ("value", "base"):  # mapping value, array element: not positioned, but width still matters
-        if key in b:
-            if key not in n:
-                errors.append(f"{here}: lost {key}")
-            else:
-                compare_entry(b[key], n[key], f"{here}.{key}", errors, position=False)
+            out[path] = (base_slot, entry.get("offset", 0), entry["type"], entry["bytes"])
+        if "value" in entry:
+            walk(entry["value"], f"{path}[value]", 0)
+        if "base" in entry:
+            out[f"{path}[element]#stride"] = entry["base"]["bytes"]
+            walk(entry["base"], f"{path}[element]", 0)
 
-
-def compare_members(base, new, path, errors):
-    """Struct members: same names in the same order (new ones only at the end), each at its old position."""
-    base_names = [e["name"] for e in base]
-    new_names = [e["name"] for e in new]
-    if new_names[: len(base_names)] != base_names:
-        errors.append(f"{path}: members reordered, removed or inserted: {base_names} -> {new_names}")
-        return
-    new_by = {e["name"]: e for e in new}
-    for b in base:
-        compare_entry(b, new_by[b["name"]], f"{path}.{b['name']}", errors, position=True)
+    for e in layout:
+        walk(e, e["name"], 0)
+    return out
 
 
 def compare_layouts(base, new, errors):
-    """Top level: the set of namespaces. Order and slot carry no meaning (each namespace has its own ERC-7201
-    slot), so a namespace may be added anywhere; removing one is an error."""
-    new_by = {e["name"]: e for e in new}
+    """Upgrade-safe means every namespace keeps its id (and so its base slot), and every leaf present at the base
+    still exists with the same position, type and width. Anything new may appear anywhere: a new namespace, a
+    member appended to a struct, or a field placed in bytes no existing field uses, since none of those moves or
+    reinterprets existing storage."""
+    new_by_name = {e["name"]: e for e in new}
     for b in base:
-        if b["name"] not in new_by:
-            errors.append(f"layout: namespace variable {b['name']} was removed from the probe")
-            continue
-        compare_entry(b, new_by[b["name"]], f"layout.{b['name']}", errors, position=False)
+        n = new_by_name.get(b["name"])
+        if n is None:
+            errors.append(f"{b['name']}: namespace removed from the probe")
+        elif b.get("namespace") and (b["namespace"], b["namespaceSlot"]) != (n.get("namespace"), n.get("namespaceSlot")):
+            errors.append(f"{b['name']}: namespace id changed {b.get('namespace')!r} -> {n.get('namespace')!r} "
+                          f"(base slot {b.get('namespaceSlot')} -> {n.get('namespaceSlot')}); the live data stays at the old slot")
+    old_leaves, new_leaves = leaves(base), leaves(new)
+    for path, was in old_leaves.items():
+        if path not in new_leaves:
+            errors.append(f"{path}: removed or renamed")
+        elif new_leaves[path] != was:
+            errors.append(f"{path}: changed {was} -> {new_leaves[path]}")
 
 
 def main(argv):
@@ -144,7 +173,6 @@ def main(argv):
     if args.check:
         committed = json.loads(OUT.read_text())
         current = compiler_layout()
-        check_probe_covers_namespaces(current)
         if committed != current:
             print("storage-layout/layout.json is stale; run tools/storage_layout.py and commit the result", file=sys.stderr)
             return 1
@@ -158,7 +186,6 @@ def main(argv):
             print(f"no snapshot at {args.compat}:{rel}; nothing to compare against")
             return 0
         current = compiler_layout()
-        check_probe_covers_namespaces(current)
         errors = []
         compare_layouts(json.loads(result.stdout), current, errors)
         if errors:
