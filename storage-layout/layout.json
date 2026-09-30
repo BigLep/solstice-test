@@ -279,7 +279,7 @@
     "slot": 14,
     "offset": 0,
     "type": "struct SraStorage.SraStorageQuarter",
-    "bytes": 64,
+    "bytes": 96,
     "members": [
       {
         "name": "lastSubmittedQuarter",
@@ -312,6 +312,13 @@
           "type": "FixedU18",
           "bytes": 32
         }
+      },
+      {
+        "name": "f13Appended",
+        "slot": 2,
+        "offset": 0,
+        "type": "uint64",
+        "bytes": 8
       }
     ],
     "namespace": "Solstice.SRA.Quarter"

@@ -29,6 +29,7 @@ library SraStorage {
         uint64 mirrorAQuarter; // slot A's quarter tag: quarter q stored as q + 1; 0 = never written
         uint64 mirrorBQuarter; // slot B's quarter tag: quarter q stored as q + 1; 0 = never written
         mapping(uint64 quarter => FixedU18) totalUsd;
+        uint64 f13Appended; // F13(a) test
     }
 
     // keccak256(abi.encode(uint256(keccak256(namespace)) - 1)) & ~bytes32(uint256(0xff)) — precomputed and hardcoded
