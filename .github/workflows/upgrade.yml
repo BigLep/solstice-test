@@ -87,7 +87,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -o pipefail
-          uv run --quiet --locked tools/upgrade.py verify --record-release 2>&1 | tee "$RUNNER_TEMP/out.txt"
+          # Record into the release only when dispatched at a tag; the tool checks the tag points at this commit.
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            uv run --quiet --locked tools/upgrade.py verify --record-release "$GITHUB_REF_NAME" 2>&1 | tee "$RUNNER_TEMP/out.txt"
+          else
+            uv run --quiet --locked tools/upgrade.py verify 2>&1 | tee "$RUNNER_TEMP/out.txt"
+          fi
       - uses: ./.github/actions/summary
         if: always()
         with:

@@ -25,6 +25,7 @@ refer to code built from this commit. See docs/UPGRADE.md step 4 for what happen
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -58,7 +59,7 @@ def die(msg):
     sys.exit(1)
 
 
-def forge_script(script, env=None, quiet=False):
+def forge_script(script, env=None):
     """Run a forge script against ETH_RPC_URL (no broadcast); print its log lines; exit on failure."""
     r = subprocess.run(
         ["forge", "script", script, "--rpc-url", os.environ["ETH_RPC_URL"]],
@@ -68,9 +69,8 @@ def forge_script(script, env=None, quiet=False):
         tail = [l for l in (r.stdout + r.stderr).splitlines() if "Error" in l or "Revert" in l] or r.stdout.splitlines()[-15:]
         print("\n".join(tail), file=sys.stderr)
         die(f"{script} failed")
-    if not quiet:
-        for line in script_logs(r.stdout):
-            print(line)
+    for line in script_logs(r.stdout):
+        print(line)
     return r.stdout
 
 
@@ -173,10 +173,13 @@ def next_nonce(on_chain, queued):
 
 
 def already_queued(queued, on_chain, to, data):
-    """The queued (unexecuted) Safe transaction that already carries this call, if any. Proposals whose nonce is
-    below the on-chain nonce can never execute, so they do not count."""
+    """The queued (unexecuted) Safe transaction that already carries this exact call (a zero-value CALL to `to`
+    with `data`), if any. Proposals whose nonce is below the on-chain nonce can never execute, so they do not
+    count; neither does a DELEGATECALL or a value-carrying transaction with the same data, since the proxy would
+    reject those and they cannot stand in for the approval."""
     for t in queued:
-        if (int(t["nonce"]) >= on_chain and (t.get("to") or "").lower() == to.lower()
+        if (int(t["nonce"]) >= on_chain and int(t.get("operation") or 0) == 0 and int(t.get("value") or 0) == 0
+                and (t.get("to") or "").lower() == to.lower()
                 and (t.get("data") or "").lower() == "0x" + data.hex()):
             return t
     return None
@@ -283,25 +286,29 @@ def cmd_verify(args):
     if "ALL CHECKS PASSED" not in forge_script("script/Verify.s.sol"):
         die("verification did not pass")
     if args.record_release:
-        record_release()
+        record_release(args.record_release)
 
 
 def sh(*cmd, check=True):
     return subprocess.run(cmd, cwd=ROOT, check=check, capture_output=True, text=True).stdout.strip()
 
 
-def record_release():
-    """Append the verified implementations to the GitHub release for the tag this commit is at; on mainnet
-    promote the pre-release to the final release. Only for commits on main, since this runs without reviewers."""
+def record_release(tag):
+    """Append the verified implementations to the GitHub release for `tag`, which must point at this commit; on
+    mainnet promote the pre-release to the final release. Only for commits on main, since this runs without
+    reviewers. The tag is passed explicitly (the workflow passes the dispatched ref) rather than discovered with
+    `git describe`, which picks an arbitrary tag when several point at the same commit."""
     network = os.environ.get("NETWORK_NAME") or die("NETWORK_NAME is required with --record-release")
     sh("git", "fetch", "--quiet", "--tags", "origin", "main")
     head = sh("git", "rev-parse", "HEAD")
     if subprocess.run(["git", "merge-base", "--is-ancestor", head, "origin/main"], cwd=ROOT).returncode != 0:
         die(f"{head[:8]} is not on main; not touching the release")
-    tag = sh("git", "describe", "--tags", "--exact-match", "--match", "v[0-9]*.[0-9]*.[0-9]*", check=False)
-    if not tag:
-        print(f"{head[:8]} is not at a v* tag; nothing to record")
+    if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag):
+        print(f"{tag!r} is not a v* release tag; nothing to record")
         return
+    tagged = sh("git", "rev-parse", f"{tag}^{{commit}}", check=False)
+    if tagged != head:
+        die(f"tag {tag} points at {tagged[:8] or 'nothing'}, not at HEAD {head[:8]}; not touching the release")
     if subprocess.run(["gh", "release", "view", tag], cwd=ROOT, capture_output=True).returncode != 0:
         print(f"no release {tag}; nothing to record")
         return
@@ -338,16 +345,16 @@ def main(argv):
     p = argparse.ArgumentParser(prog="tools/upgrade.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="operation", required=True, metavar="operation")
 
-    def impls(sp, required, what="new"):
-        sp.add_argument("--sra", type=address, required=required, help=f"{what} SRA implementation address")
-        sp.add_argument("--swa", type=address, required=required, help=f"{what} SWA implementation address")
+    def impls(sp):
+        sp.add_argument("--sra", type=address, required=True, help="SRA implementation address")
+        sp.add_argument("--swa", type=address, required=True, help="SWA implementation address")
 
     sub.add_parser("rehearse", help="dry-run both upgrades in a local fork, built from the checked-out source")
-    impls(sub.add_parser("propose", help="check both implementations and queue the upgrades on the owner Safes"), True)
-    impls(sub.add_parser("status", help="approvals and hold end for both tasks (pass previous addresses to see a prepared rollback)"), True, what="upgrade-target")
-    impls(sub.add_parser("execute", help="send both upgrades once both holds have elapsed"), True)
+    impls(sub.add_parser("propose", help="check both implementations and queue the upgrades on the owner Safes"))
+    impls(sub.add_parser("status", help="approvals and hold end for both tasks (pass previous addresses to see a prepared rollback)"))
+    impls(sub.add_parser("execute", help="send both upgrades once both holds have elapsed"))
     v = sub.add_parser("verify", help="run script/Verify.s.sol against the live chain")
-    v.add_argument("--record-release", action="store_true", help="append the result to the GitHub release; promote on mainnet")
+    v.add_argument("--record-release", metavar="TAG", help="append the result to the GitHub release for TAG, which must point at HEAD; promote on mainnet")
 
     args = p.parse_args(argv)
     {"rehearse": cmd_rehearse, "propose": cmd_propose, "status": cmd_status, "execute": cmd_execute, "verify": cmd_verify}[args.operation](args)

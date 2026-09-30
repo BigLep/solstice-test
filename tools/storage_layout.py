@@ -76,37 +76,33 @@ def normalize(layout):
     ]
 
 
-def keccak(data: bytes) -> bytes:
-    """keccak256 via cast, which is already required; the standard library has no keccak."""
-    out = subprocess.run(["cast", "keccak", "0x" + data.hex()], capture_output=True, text=True, check=True).stdout
-    return bytes.fromhex(out.strip()[2:])
-
-
-def erc7201_slot(namespace_id):
-    """keccak256(abi.encode(uint256(keccak256(id)) - 1)) & ~0xff, the ERC-7201 base slot for a namespace id."""
-    inner = int.from_bytes(keccak(namespace_id.encode()), "big") - 1
-    return "0x" + (int.from_bytes(keccak(inner.to_bytes(32, "big")), "big") & ~0xFF).to_bytes(32, "big").hex()
-
-
 def namespaces():
-    """{struct name: {"id": namespace id, "slot": derived base slot}} for every struct in src/ declared with an
-    ERC-7201 @custom:storage-location tag. The id string decides where the namespace's data lives in the proxy;
-    changing it relocates the whole namespace to an empty region, so it is recorded and compared like a leaf."""
-    found = {}
+    """{struct name: namespace id} for every struct in src/ declared with an ERC-7201 @custom:storage-location
+    tag. The id string decides where the namespace's data lives in the proxy (test/StorageSlots.t.sol pins each
+    slot constant to its derivation), so changing it relocates the whole namespace to an empty region and it is
+    compared like a leaf. Ids must be unique, or two structs would alias the same storage; struct names must be
+    unique too, since the probe's variables are matched to structs by name."""
+    found, by_id = {}, {}
     for path in sorted((ROOT / "src").rglob("*.sol")):
         for namespace_id, struct in NAMESPACE_RE.findall(path.read_text()):
-            found[struct] = {"id": namespace_id, "slot": erc7201_slot(namespace_id)}
+            if struct in found:
+                print(f"namespaced struct name {struct} is declared twice; rename one", file=sys.stderr)
+                sys.exit(1)
+            if namespace_id in by_id:
+                print(f"namespace id {namespace_id!r} is used by both {by_id[namespace_id]} and {struct}; they would alias the same storage", file=sys.stderr)
+                sys.exit(1)
+            found[struct], by_id[namespace_id] = namespace_id, struct
     return found
 
 
 def with_namespaces(layout):
-    """Attach each probe variable's namespace id and base slot; fail if a namespaced struct is not probed."""
+    """Attach each probe variable's namespace id; fail if a namespaced struct is not probed."""
     known = namespaces()
     probed = set()
     for e in layout:
         struct = e["type"].split(".")[-1]
         if struct in known:
-            e["namespace"], e["namespaceSlot"] = known[struct]["id"], known[struct]["slot"]
+            e["namespace"] = known[struct]
             probed.add(struct)
     missing = sorted(set(known) - probed)
     if missing:
@@ -143,7 +139,7 @@ def leaves(layout):
 
 
 def compare_layouts(base, new, errors):
-    """Upgrade-safe means every namespace keeps its id (and so its base slot), and every leaf present at the base
+    """Upgrade-safe means every namespace keeps its id (and so its ERC-7201 slot), and every leaf present at the base
     still exists with the same position, type and width. Anything new may appear anywhere: a new namespace, a
     member appended to a struct, or a field placed in bytes no existing field uses, since none of those moves or
     reinterprets existing storage."""
@@ -152,9 +148,9 @@ def compare_layouts(base, new, errors):
         n = new_by_name.get(b["name"])
         if n is None:
             errors.append(f"{b['name']}: namespace removed from the probe")
-        elif b.get("namespace") and (b["namespace"], b["namespaceSlot"]) != (n.get("namespace"), n.get("namespaceSlot")):
-            errors.append(f"{b['name']}: namespace id changed {b.get('namespace')!r} -> {n.get('namespace')!r} "
-                          f"(base slot {b.get('namespaceSlot')} -> {n.get('namespaceSlot')}); the live data stays at the old slot")
+        elif b.get("namespace") and b["namespace"] != n.get("namespace"):
+            errors.append(f"{b['name']}: namespace id changed {b['namespace']!r} -> {n.get('namespace')!r}; "
+                          "the live data stays at the slot derived from the old id")
     old_leaves, new_leaves = leaves(base), leaves(new)
     for path, was in old_leaves.items():
         if path not in new_leaves:

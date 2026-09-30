@@ -71,6 +71,18 @@ class AlreadyQueued(unittest.TestCase):
     def test_different_call_does_not_count(self):
         self.assertIsNone(already_queued([self.queued(5, data="0xdeadbeef")], 5, self.TO, self.DATA))
 
+    def test_delegatecall_with_same_data_does_not_count(self):
+        self.assertIsNone(already_queued([dict(self.queued(5), operation=1)], 5, self.TO, self.DATA))
+
+    def test_value_carrying_call_does_not_count(self):
+        self.assertIsNone(already_queued([dict(self.queued(5), value="1")], 5, self.TO, self.DATA))
+
+    def test_service_fields_may_be_strings_or_absent(self):
+        self.assertIsNotNone(already_queued([dict(self.queued(5), operation="0", value="0")], 5, self.TO, self.DATA))
+        t = self.queued(5)
+        t.pop("value", None)
+        self.assertIsNotNone(already_queued([t], 5, self.TO, self.DATA))
+
 
 class ScriptLogs(unittest.TestCase):
     def test_extracts_logs_between_markers(self):

@@ -3,7 +3,7 @@
 import copy
 import unittest
 
-from storage_layout import compare_layouts, erc7201_slot, leaves, normalize
+from storage_layout import compare_layouts, leaves, normalize
 
 
 def leaf(name, slot, offset, type_, nbytes):
@@ -13,7 +13,7 @@ def leaf(name, slot, offset, type_, nbytes):
 def struct(name, slot, type_, members, nbytes, namespace=None):
     e = {"name": name, "slot": slot, "offset": 0, "type": type_, "bytes": nbytes, "members": members}
     if namespace:
-        e["namespace"], e["namespaceSlot"] = namespace, "0x" + namespace.encode().hex().ljust(64, "0")
+        e["namespace"] = namespace
     return e
 
 
@@ -158,7 +158,6 @@ class CompatRules(unittest.TestCase):
     def test_changed_namespace_id_fails_even_with_identical_struct(self):
         new = base_layout()
         new[0]["namespace"] = "Solstice.OwnerSet"
-        new[0]["namespaceSlot"] = "0x" + "ab" * 32
         errors = errors_for(new)
         self.assertEqual(len(errors), 1)
         self.assertTrue(errors[0].startswith("owners: namespace id changed 'Solstice.Owners' -> 'Solstice.OwnerSet'"))
@@ -177,13 +176,6 @@ class Leaves(unittest.TestCase):
         self.assertEqual(flat["owners.ownerInfo[value].bitId"], (0, 0, "uint8", 1))  # region restarts at the mapping value
         self.assertEqual(flat["gateParams.params.target.stepRatio"], (2, 0, "FixedU18", 32))  # 1 + 0 + 1 along the path
         self.assertEqual(flat["sraRegistry.admittedIds[element]#stride"], 8)
-
-
-class Erc7201Slot(unittest.TestCase):
-    def test_matches_the_constants_in_src(self):
-        # The same derivation test/StorageSlots.t.sol pins the Solidity constants to.
-        self.assertEqual(erc7201_slot("Solstice.Owners"), "0x7d2e7f914625694dd929b468ac404d7943373f4d24421c78ac93b57cc8efb500")
-        self.assertEqual(erc7201_slot("Solstice.PendingTasks"), "0x635f64a8ec66823e68578973f5bc466fd4e0eadd655f760cfc91e860524aa300")
 
 
 class Normalize(unittest.TestCase):

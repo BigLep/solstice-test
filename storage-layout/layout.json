@@ -41,8 +41,7 @@
         "bytes": 20
       }
     ],
-    "namespace": "Solstice.Owners",
-    "namespaceSlot": "0x7d2e7f914625694dd929b468ac404d7943373f4d24421c78ac93b57cc8efb500"
+    "namespace": "Solstice.Owners"
   },
   {
     "name": "pendingTasks",
@@ -88,8 +87,7 @@
         }
       }
     ],
-    "namespace": "Solstice.PendingTasks",
-    "namespaceSlot": "0x635f64a8ec66823e68578973f5bc466fd4e0eadd655f760cfc91e860524aa300"
+    "namespace": "Solstice.PendingTasks"
   },
   {
     "name": "gateParams",
@@ -145,8 +143,7 @@
         ]
       }
     ],
-    "namespace": "Solstice.GateParams",
-    "namespaceSlot": "0xf9abab00248d945495524c8caf6be2b837274c1becd1964fb3775f62fd6e4600"
+    "namespace": "Solstice.GateParams"
   },
   {
     "name": "gateCheck",
@@ -170,8 +167,7 @@
         "bytes": 8
       }
     ],
-    "namespace": "Solstice.GateCheck",
-    "namespaceSlot": "0xf841decd8ddcb41f8d697f3767c4cb55c655b2888a4f9b80db06444434da1700"
+    "namespace": "Solstice.GateCheck"
   },
   {
     "name": "sraRegistry",
@@ -276,8 +272,7 @@
         }
       }
     ],
-    "namespace": "Solstice.SRA.Registry",
-    "namespaceSlot": "0xb7fd4b054ced95f43476af93bf71636318271f9e64f7661dc52f0fb4c1a54400"
+    "namespace": "Solstice.SRA.Registry"
   },
   {
     "name": "sraQuarter",
@@ -319,7 +314,6 @@
         }
       }
     ],
-    "namespace": "Solstice.SRA.Quarter",
-    "namespaceSlot": "0x347e624280399e1e720d839edbd7cd00c80c69bf34cd8ee59e27f691732af300"
+    "namespace": "Solstice.SRA.Quarter"
   }
 ]
