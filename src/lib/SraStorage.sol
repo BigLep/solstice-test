@@ -17,6 +17,7 @@ library SraStorage {
     /// @custom:storage-location erc7201:Solstice.SRA.Registry
     struct SraStorageRegistry {
         mapping(uint64 id => OrchestratorInfo) orchestrators; // id is the identity (monotonic, never reused)
+        uint256 f13Inserted; // F13(c) test
         mapping(address orch => uint64 id) activeIdOf; // current effective address -> id (0 = unregistered sentinel)
         mapping(bytes32 pairId => uint64 id) bindings; // pairId = keccak256(abi.encode(payer, operator))
         uint64 allocatedIds; // id allocator
