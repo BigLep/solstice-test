@@ -17,5 +17,4 @@ contract StorageLayoutProbe {
     GateParamsLibrary.GateParamsInfo internal gateParams;
     GateParamsLibrary.GateCheckBlockers internal gateCheck;
     SraStorage.SraStorageRegistry internal sraRegistry;
-    SraStorage.SraStorageQuarter internal sraQuarter;
 }
