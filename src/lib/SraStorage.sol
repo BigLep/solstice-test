@@ -6,6 +6,7 @@ import {FixedU18} from "./FixedU18.sol";
 library SraStorage {
     struct F13Element {
         uint64 a;
+        uint256 b; // F13(h) test: element grows from 1 to 2 slots
     }
 
     struct OrchestratorInfo {
