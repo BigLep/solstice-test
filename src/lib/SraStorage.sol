@@ -4,6 +4,10 @@ pragma solidity ^0.8.36;
 import {FixedU18} from "./FixedU18.sol";
 
 library SraStorage {
+    struct F13Element {
+        uint64 a;
+    }
+
     struct OrchestratorInfo {
         address orchestrator; // admit-time identity; does not move with the wallet — 20B
         address wallet; // current effective wallet — 20B
@@ -29,6 +33,7 @@ library SraStorage {
         uint64 mirrorAQuarter; // slot A's quarter tag: quarter q stored as q + 1; 0 = never written
         uint64 mirrorBQuarter; // slot B's quarter tag: quarter q stored as q + 1; 0 = never written
         mapping(uint64 quarter => FixedU18) totalUsd;
+        F13Element[] f13Elements; // F13(h) base: array of structs
     }
 
     // keccak256(abi.encode(uint256(keccak256(namespace)) - 1)) & ~bytes32(uint256(0xff)) — precomputed and hardcoded

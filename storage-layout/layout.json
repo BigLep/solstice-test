@@ -279,7 +279,7 @@
     "slot": 14,
     "offset": 0,
     "type": "struct SraStorage.SraStorageQuarter",
-    "bytes": 64,
+    "bytes": 96,
     "members": [
       {
         "name": "lastSubmittedQuarter",
@@ -311,6 +311,26 @@
         "value": {
           "type": "FixedU18",
           "bytes": 32
+        }
+      },
+      {
+        "name": "f13Elements",
+        "slot": 2,
+        "offset": 0,
+        "type": "struct SraStorage.F13Element[]",
+        "bytes": 32,
+        "base": {
+          "type": "struct SraStorage.F13Element",
+          "bytes": 32,
+          "members": [
+            {
+              "name": "a",
+              "slot": 0,
+              "offset": 0,
+              "type": "uint64",
+              "bytes": 8
+            }
+          ]
         }
       }
     ],
