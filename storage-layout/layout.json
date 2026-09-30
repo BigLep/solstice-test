@@ -153,18 +153,18 @@
     "bytes": 64,
     "members": [
       {
-        "name": "pendingGateParamsTaskId",
-        "slot": 0,
-        "offset": 0,
-        "type": "bytes32",
-        "bytes": 32
-      },
-      {
         "name": "pendingWeightUntil",
-        "slot": 1,
+        "slot": 0,
         "offset": 0,
         "type": "Epoch",
         "bytes": 8
+      },
+      {
+        "name": "pendingGateParamsTaskId",
+        "slot": 1,
+        "offset": 0,
+        "type": "bytes32",
+        "bytes": 32
       }
     ],
     "namespace": "Solstice.GateCheck"

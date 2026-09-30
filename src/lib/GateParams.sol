@@ -28,8 +28,8 @@ library GateParamsLibrary {
 
     /// @custom:storage-location erc7201:Solstice.GateCheck
     struct GateCheckBlockers {
-        bytes32 pendingGateParamsTaskId;
         Epoch pendingWeightUntil;
+        bytes32 pendingGateParamsTaskId;
     }
 
     // keccak256(abi.encode(uint256(keccak256("Solstice.GateCheck")) - 1)) & ~bytes32(uint256(0xff));
