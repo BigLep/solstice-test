@@ -19,6 +19,7 @@ contract UnanimousGovernance {
     error HoldUntil(Epoch until);
     error AlreadyApproved();
     error TaskNotFound(bytes32 taskId);
+    error NoOwners();
 
     modifier anyOwner() {
         require(msg.sender.isOwner(), OwnersLibrary.NotOwner(msg.sender));
@@ -36,7 +37,7 @@ contract UnanimousGovernance {
         PendingTask memory loaded = taskInfo.task;
         OwnerSet allOwners = OwnersLibrary.getAllOwners();
 
-        require(allOwners != EMPTY_SET, OwnersLibrary.NotOwner(msg.sender));
+        require(allOwners != EMPTY_SET, NoOwners());
 
         // modify
         if (loaded.approvals & allOwners == allOwners) {
