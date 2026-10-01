@@ -6,7 +6,7 @@ title: "Upgrade to vX.Y.Z"
 labels: upgrade
 ---
 
-Runbook: [docs/UPGRADE.md](https://github.com/filecoin-project/solstice/blob/main/docs/UPGRADE.md). This issue tracks progress: check items off and put each GitHub Action run link or comment link under its item. The durable record (implementation addresses, transaction hashes) lives in the GitHub release for the tag, not here.
+Runbook: [docs/UPGRADE.md](https://github.com/filecoin-project/solstice/blob/main/docs/UPGRADE.md). This issue tracks progress: check items off and put each GitHub Action run link or comment link under its item. The durable record (implementation addresses, transaction hashes) lives in the GitHub release for the tag, not here. For a rollback (an upgrade back to the previous tag), open this same template, skip the merge, rehearse and deploy items, and start at propose dispatched at the previous tag.
 
 - Tag: `vX.Y.Z`
 - FIP: `<link, or why none is needed>`
@@ -53,5 +53,9 @@ Runbook: [docs/UPGRADE.md](https://github.com/filecoin-project/solstice/blob/mai
 - [ ] Mainnet: [verified](https://github.com/filecoin-project/solstice/blob/main/docs/UPGRADE.md#7-verify); this `verify` run promotes the pre-release to the final release
   - GitHub Action run:
   - final release:
-- [ ] If a [prepared rollback](https://github.com/filecoin-project/solstice/blob/main/docs/UPGRADE.md#rollback) was used: vetoed by an owner after the monitoring window
+- [ ] Optional [prepared rollback](https://github.com/filecoin-project/solstice/blob/main/docs/UPGRADE.md#rollback) proposed at the previous tag after execute; first owner executed at once, second at the start of the monitoring window
+  - GitHub Action run:
+  - owner txs (SRA):
+  - owner txs (SWA):
+- [ ] Prepared rollback vetoed by an owner after the monitoring window (or executed and verified, if rolling back)
   - veto tx:
