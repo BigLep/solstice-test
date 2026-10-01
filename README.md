@@ -1,3 +1,6 @@
+> [!WARNING]
+> **This repository is a throwaway test fork, not the real Solstice repo.** It was created in support of https://github.com/filecoin-project/solstice/issues/86 to validate the upgrade process from https://github.com/filecoin-project/solstice/pull/84 end to end against test proxies and test Safes on calibration. Its releases, tags, addresses and deployments are test artifacts only. The real project is https://github.com/filecoin-project/solstice.
+
 # solstice
 Supporting contracts and tools for https://github.com/filecoin-project/FIPs/discussions/1249
 
