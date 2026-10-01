@@ -2,6 +2,10 @@
 
 Each version is one tag and one GitHub release covering both SRA and SWA. The release is created automatically as a pre-release when `version.json` changes on `main` (see `.github/workflows/releaser.yml`) and is promoted to a release when the mainnet upgrade is verified. Put the notes for the next version under its heading before merging the bump.
 
+## v1.0.5
+
+- Rerun for filecoin-project/solstice#86 with the at_block fix (df8f5f1); contract code unchanged from v1.0.4.
+
 ## v1.0.4
 
 - Rerun for filecoin-project/solstice#86 with the #84 fixes (fbfa52e): same contract code as v1.0.1 plus the F13(h) test struct array; exercises the fixed `execute`, `propose` and `verify`.
