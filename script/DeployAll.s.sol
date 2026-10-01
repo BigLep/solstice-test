@@ -12,16 +12,16 @@ contract DeployAllScript is DeploymentScript {
         vm.writeJson(vm.toString(swa), CONFIG_PATH, string.concat(key, ".swa"));
     }
 
-    function run() public returns (address sra, address swa) {
+    function run() public returns (address sra, address swa, address sraImplementation, address swaImplementation) {
         string memory key = _configKey();
         Config memory config = _loadConfig(vm.readFile(CONFIG_PATH), key);
 
         vm.startBroadcast();
 
-        address sraImplementation = _deploySraImplementation(config);
+        sraImplementation = _deploySraImplementation(config);
         sra = initializeProxy(sraImplementation);
 
-        address swaImplementation = _deploySwaImplementation(config, sra);
+        swaImplementation = _deploySwaImplementation(config, sra);
         swa = initializeProxy(swaImplementation);
 
         vm.stopBroadcast();
