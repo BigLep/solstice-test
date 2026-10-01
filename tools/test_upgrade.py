@@ -11,7 +11,7 @@ import unittest
 
 from eth_utils import keccak
 
-from upgrade import VETO_SELECTOR, already_queued, approval_set, epochs_to_text, next_nonce, script_logs, upgrade_calldata
+from upgrade import VETO_SELECTOR, already_queued, approval_set, at_block, epochs_to_text, next_nonce, script_logs, upgrade_calldata
 
 
 class Calldata(unittest.TestCase):
@@ -94,6 +94,26 @@ class ApprovalSet(unittest.TestCase):
 
     def test_no_task(self):
         self.assertFalse(approval_set(0, 1))
+
+
+class AtBlock(unittest.TestCase):
+    def test_retries_lagging_backend_wordings(self):
+        errors = iter([
+            Exception("RPC error (-32603): requested a future epoch (beyond \"latest\")"),
+            Exception("tipset height in future"),
+        ])
+        def read():
+            try:
+                raise next(errors)
+            except StopIteration:
+                return "value"
+        self.assertEqual(at_block(read, sleep=lambda s: None), "value")
+
+    def test_gives_up_at_deadline(self):
+        def read():
+            raise Exception("requested a future epoch")
+        with self.assertRaises(Exception):
+            at_block(read, timeout=0, sleep=lambda s: None)
 
 
 class EpochsToText(unittest.TestCase):
