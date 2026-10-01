@@ -200,18 +200,18 @@ def epochs_to_text(epochs):
     return f"{seconds / 86400:.1f} days"
 
 
-def at_block(read, timeout=90):
+def at_block(read, timeout=90, sleep=time.sleep):
     """Run a read pinned to a block, retrying while the RPC backend has not seen that block yet. Glif load-balances
-    across nodes that can lag a tipset, and a lagging one answers with "tipset height in future"."""
+    across nodes that can lag a tipset, and a lagging one rejects the block with varying wording ("tipset height
+    in future", "requested a future epoch", ...), so any error is retried until the deadline; the read is pure."""
     deadline = time.monotonic() + timeout
     while True:
         try:
             return read()
-        except Exception as e:
-            text = str(e).lower()
-            if time.monotonic() >= deadline or not ("height in future" in text or "not found" in text):
+        except Exception:
+            if time.monotonic() >= deadline:
                 raise
-            time.sleep(5)
+            sleep(5)
 
 
 def next_nonce(on_chain, queued):
