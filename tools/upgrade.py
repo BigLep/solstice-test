@@ -28,6 +28,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from eth_abi import encode
@@ -46,6 +47,9 @@ IMPLEMENTATION_SLOT = bytes.fromhex("360894a13ba1a3210667c828492db98dca3e2076cc3
 # ERC-7201 slot of the pending-task mapping: keccak256(abi.encode(uint256(keccak256("Solstice.PendingTasks")) - 1))
 # & ~0xff. Same constant as src/lib/PendingTask.sol; test/StorageSlots.t.sol pins it.
 PENDING_TASKS_SLOT = bytes.fromhex("635f64a8ec66823e68578973f5bc466fd4e0eadd655f760cfc91e860524aa300")
+# ERC-7201 slot of the owner set: keccak256(abi.encode(uint256(keccak256("Solstice.Owners")) - 1)) & ~0xff. Same
+# constant as src/lib/Owners.sol; word 0 is the ownerInfo mapping base, whose value's low byte is the owner's bit id.
+OWNERS_SLOT = bytes.fromhex("7d2e7f914625694dd929b468ac404d7943373f4d24421c78ac93b57cc8efb500")
 UPGRADE_SELECTOR = keccak(text="upgradeToAndCall(address,bytes)")[:4]
 VETO_SELECTOR = keccak(text="veto(bytes32)")[:4]
 SAFE_SERVICES = {
@@ -109,8 +113,13 @@ class Chain:
     def owners(self, target):
         return [to_checksum_address(self.cfg[f"{target}Owner1"]), to_checksum_address(self.cfg[f"{target}Owner2"])]
 
-    def current_impl(self, target):
-        return to_checksum_address(self.w3.eth.get_storage_at(self.proxy(target), IMPLEMENTATION_SLOT)[-20:])
+    def current_impl(self, target, block="latest"):
+        return to_checksum_address(self.w3.eth.get_storage_at(self.proxy(target), IMPLEMENTATION_SLOT, block)[-20:])
+
+    def owner_bit(self, target, owner):
+        """The owner's bit id in the proxy's owner set (0 if not an owner); bit ids are 1-based."""
+        slot = keccak(encode(["address", "bytes32"], [to_checksum_address(owner), OWNERS_SLOT]))
+        return self.w3.eth.get_storage_at(self.proxy(target), slot)[-1]
 
 
 class Task:
@@ -125,10 +134,17 @@ class Task:
         self.task_id = keccak(self.calldata)
         self.slot = keccak(encode(["bytes32", "bytes32"], [self.task_id, PENDING_TASKS_SLOT]))
 
+    def word(self):
+        return int.from_bytes(self.chain.w3.eth.get_storage_at(self.proxy, self.slot), "big")
+
     def state(self):
         """(last modified epoch, number of approvals); (0, 0) when no task is pending."""
-        word = int.from_bytes(self.chain.w3.eth.get_storage_at(self.proxy, self.slot), "big")
+        word = self.word()
         return word & ((1 << 64) - 1), bin((word >> 64) & ((1 << 160) - 1)).count("1")
+
+    def approved_by(self, owner):
+        """Whether this owner's approval bit is already set on the pending task."""
+        return approval_set(self.word(), self.chain.owner_bit(self.target, owner))
 
     def executable(self, block):
         modified, approvals = self.state()
@@ -157,13 +173,45 @@ class Task:
             left = end - block
             if approvals >= 2:
                 print(f"approved by both owners at epoch {modified}; "
-                      + (f"hold ends at epoch {end} ({left} epochs, about {left * 30 // 3600}h)" if left > 0 else "executable now by anyone"))
+                      + (f"hold ends at epoch {end} ({left} epochs, about {epochs_to_text(left)})" if left > 0 else "executable now by anyone"))
             else:
                 print(f"{approvals} approval(s), last at epoch {modified}; the hold starts on the second approval")
         elif self.chain.current_impl(self.target) == self.impl:
             print("live: the proxy points at this implementation")
         else:
             print("no pending task (not submitted, or already executed or vetoed)")
+
+
+def approval_set(task_word, bit_id):
+    """Whether the owner with 1-based `bit_id` has approved, given the raw PendingTask word."""
+    if bit_id == 0:
+        return False
+    approvals = (task_word >> 64) & ((1 << 160) - 1)
+    return bool(approvals & (1 << (bit_id - 1)))
+
+
+def epochs_to_text(epochs):
+    """Filecoin epochs are 30 seconds; say it in minutes, hours or days as appropriate."""
+    seconds = epochs * 30
+    if seconds < 2 * 3600:
+        return f"{seconds // 60} min"
+    if seconds < 2 * 86400:
+        return f"{seconds / 3600:.1f} h"
+    return f"{seconds / 86400:.1f} days"
+
+
+def at_block(read, timeout=90):
+    """Run a read pinned to a block, retrying while the RPC backend has not seen that block yet. Glif load-balances
+    across nodes that can lag a tipset, and a lagging one answers with "tipset height in future"."""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            return read()
+        except Exception as e:
+            text = str(e).lower()
+            if time.monotonic() >= deadline or not ("height in future" in text or "not found" in text):
+                raise
+            time.sleep(5)
 
 
 def next_nonce(on_chain, queued):
@@ -212,6 +260,9 @@ def cmd_propose(args):
         print()
         print(f"== Queuing the {task.name} upgrade on its owner Safes as {account.address} via {base_url} ==")
         for owner in chain.owners(task.target):
+            if task.approved_by(owner):
+                print(f"Safe {owner}: already approved this task on chain; skipping (a second execution would revert)")
+                continue
             safe = Safe(owner, chain.client)
             on_chain = safe.retrieve_nonce()
             queued = api.get_transactions(owner, executed="false", limit=100)
@@ -229,7 +280,8 @@ def cmd_propose(args):
             try:
                 api.post_transaction(safe_tx)
             except Exception as e:  # SafeAPIException carries the service's reason
-                die(f"  proposal rejected: {e}\n  Is {account.address} registered as a proposer on {owner}? See docs/UPGRADE.md.")
+                die(f"  proposal rejected: {e}\n  Is {account.address} registered as a proposer on {owner}? An owner of that Safe "
+                    "registers it once in the Safe app; see the Operations key row in docs/UPGRADE.md.")
             print(f"  queued; the owners of {owner} confirm and execute it at https://safe.filecoin.io")
     print()
     print("Next: tell each owner group their Safe has the upgrade queued. The first owner's execution submits it; "
@@ -252,14 +304,23 @@ def cmd_execute(args):
     block = chain.w3.eth.block_number
     for task in todo:
         task.status()
-    not_ready = [t.name for t in todo if not t.executable(block)]
+    not_ready = []
+    for t in todo:
+        modified, _ = t.state()
+        if modified == 0:
+            not_ready.append(f"{t.name} has no pending task (never submitted, or vetoed)")
+        elif not t.executable(block):
+            not_ready.append(f"{t.name} not yet executable")
     if not_ready:
-        die(f"not executing anything: {', '.join(not_ready)} not yet executable (both contracts must be ready)")
+        die("not executing anything (both contracts must be ready): " + "; ".join(not_ready))
+    # Filecoin state at "latest" lags a message whose receipt was just returned by one tipset, so take the nonce
+    # from "pending" once and count up locally, and read results at the receipt's block rather than "latest".
+    nonce = chain.w3.eth.get_transaction_count(account.address, "pending")
     for task in todo:
         print(f"== Executing the {task.name} upgrade from {account.address} ==")
         tx = {
             "from": account.address, "to": task.proxy, "data": task.calldata, "value": 0,
-            "chainId": chain.chain_id, "nonce": chain.w3.eth.get_transaction_count(account.address),
+            "chainId": chain.chain_id, "nonce": nonce,
         }
         try:
             tx["gas"] = chain.w3.eth.estimate_gas(tx)
@@ -269,12 +330,14 @@ def cmd_execute(args):
         tx["maxPriorityFeePerGas"] = int(fees["reward"][0][0]) if fees.get("reward") else chain.w3.eth.max_priority_fee
         tx["maxFeePerGas"] = int(fees["baseFeePerGas"][-1]) * 2 + tx["maxPriorityFeePerGas"]
         tx_hash = chain.w3.eth.send_raw_transaction(account.sign_transaction(tx).raw_transaction)
+        nonce += 1
         receipt = chain.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=600)
         print(f"tx 0x{tx_hash.hex()} status {receipt['status']} block {receipt['blockNumber']}")
         if receipt["status"] != 1:
-            die("execution transaction reverted")
-        if chain.current_impl(task.target) != task.impl:
-            die(f"implementation slot is {chain.current_impl(task.target)}, not {task.impl}")
+            die("execution transaction reverted; rerun `execute` once the cause is fixed (it skips contracts already upgraded)")
+        live = at_block(lambda: chain.current_impl(task.target, receipt["blockNumber"]))
+        if live != task.impl:
+            die(f"implementation slot at block {receipt['blockNumber']} is {live}, not {task.impl}")
         print(f"implementation slot now {task.impl}")
     print()
     for task in tasks(chain, args):
@@ -315,18 +378,17 @@ def record_release(tag):
     chain = Chain()
     facts = f"SRA implementation `{chain.current_impl('sra')}`, SWA implementation `{chain.current_impl('swa')}`"
     body = sh("gh", "release", "view", tag, "--json", "body", "-q", ".body")
-    if any(line.startswith(f"**Verified on {network}**") and facts in line for line in body.splitlines()):
-        print(f"release {tag} already records this verification on {network}; not appending again")
-    else:
-        run_url = os.environ.get("RUN_URL", "")
-        body += (f"\n\n**Verified on {network}** at epoch {chain.w3.eth.block_number} from `{head[:8]}`"
-                 + (f" ([run]({run_url}))" if run_url else "") + f": {facts}.\n")
+    # Every successful verification is appended (epoch and run link included), so a rerun and a rollback's
+    # re-verification both show in the release as what they are.
+    run_url = os.environ.get("RUN_URL", "")
+    body += (f"\n\n**Verified on {network}** at epoch {chain.w3.eth.block_number} from `{head[:8]}`"
+             + (f" ([run]({run_url}))" if run_url else "") + f": {facts}.\n")
     notes = ROOT / "release-notes.tmp.md"
     notes.write_text(body)
     try:
         if network == "Mainnet":
             sh("gh", "release", "edit", tag, "--notes-file", str(notes), "--prerelease=false", "--latest")
-            print(f"recorded verification and promoted {tag} to the final release")
+            print(f"recorded verification in {tag} and made it the final release")
         else:
             sh("gh", "release", "edit", tag, "--notes-file", str(notes))
             print(f"recorded verification in pre-release {tag}")

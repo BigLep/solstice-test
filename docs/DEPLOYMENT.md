@@ -12,7 +12,7 @@ A new network gets new proxies and new implementations. Every step is a PR or a 
 
 1. **Config PR.** Add an entry for the chain id to [`deployments.json`](../deployments.json) with the owners, orchestrator, epoch parameters and `hold`, and with `sra` and `swa` present and set to the zero address. Add the network to the `network` choice in [`deploy-contract.yml`](../.github/workflows/deploy-contract.yml) and [`upgrade.yml`](../.github/workflows/upgrade.yml), and to the RPC map in [`deploy-contract.yml`](../.github/workflows/deploy-contract.yml) and [`.github/actions/setup/action.yml`](../.github/actions/setup/action.yml). Merge it.
 2. **Environment.** Create a GitHub [environment](https://github.com/filecoin-project/solstice/settings/environments) named after the network with the secret `DEPLOYER_PRIVATE_KEY`, required reviewers, and the branch and tag policy of the existing ones. Any funded key works: it pays gas and has no power over the contracts afterwards, so it does not need to be a multisig.
-3. **Dry run, then deploy.** Dispatch the [Deploy Contract workflow](https://github.com/filecoin-project/solstice/actions/workflows/deploy-contract.yml) ([source](../.github/workflows/deploy-contract.yml)) twice from `main`, first as a dry run, then live:
+3. **Dry run, then deploy.** Dispatch the [Deploy Contract workflow](https://github.com/filecoin-project/solstice/actions/workflows/deploy-contract.yml) twice from `main`, first as a dry run, then live:
 
    ```sh
    gh workflow run deploy-contract.yml --ref main -f network=<Network> -f target="Full deployment (implementations and proxies)"

@@ -1,0 +1,35 @@
+name: Release check
+
+# Catches on the PR what the Releaser would otherwise only reject after merge: a version.json bump needs a
+# matching CHANGELOG.md section, and its tag must not already exist elsewhere.
+on:
+  pull_request:
+    branches: ["main"]
+    paths: ["version.json", "CHANGELOG.md"]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Bumped version has a changelog section and a free tag
+        run: |
+          set -euo pipefail
+          TAG=$(jq -r .version version.json)
+          BASE_TAG=$(git show "origin/${GITHUB_BASE_REF}:version.json" | jq -r .version)
+          if [ "$TAG" = "$BASE_TAG" ]; then
+            echo "version.json unchanged ($TAG); nothing will be released"; exit 0
+          fi
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "version.json must be vMAJOR.MINOR.PATCH, got $TAG" >&2; exit 1; }
+          if ! awk -v tag="$TAG" '/^## / { printing = ($2 == tag); next } printing && NF { found = 1 } END { exit !found }' CHANGELOG.md; then
+            echo "CHANGELOG.md has no non-empty section '## $TAG'; the Releaser would fail after merge" >&2; exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "tag $TAG already exists; this check is stricter than the Releaser (which tolerates an ancestor tag), bump past it" >&2; exit 1
+          fi
+          echo "ok: $TAG has a changelog section and no existing tag"

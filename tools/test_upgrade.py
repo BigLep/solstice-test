@@ -11,7 +11,7 @@ import unittest
 
 from eth_utils import keccak
 
-from upgrade import VETO_SELECTOR, already_queued, next_nonce, script_logs, upgrade_calldata
+from upgrade import VETO_SELECTOR, already_queued, approval_set, epochs_to_text, next_nonce, script_logs, upgrade_calldata
 
 
 class Calldata(unittest.TestCase):
@@ -82,6 +82,25 @@ class AlreadyQueued(unittest.TestCase):
         t = self.queued(5)
         t.pop("value", None)
         self.assertIsNotNone(already_queued([t], 5, self.TO, self.DATA))
+
+
+class ApprovalSet(unittest.TestCase):
+    def test_bits(self):
+        word = (0b101 << 64) | 4110000  # owners with bit ids 1 and 3 approved, last modified at epoch 4110000
+        self.assertTrue(approval_set(word, 1))
+        self.assertFalse(approval_set(word, 2))
+        self.assertTrue(approval_set(word, 3))
+        self.assertFalse(approval_set(word, 0))  # not an owner
+
+    def test_no_task(self):
+        self.assertFalse(approval_set(0, 1))
+
+
+class EpochsToText(unittest.TestCase):
+    def test_units(self):
+        self.assertEqual(epochs_to_text(17), "8 min")
+        self.assertEqual(epochs_to_text(720), "6.0 h")
+        self.assertEqual(epochs_to_text(20160), "7.0 days")
 
 
 class ScriptLogs(unittest.TestCase):
